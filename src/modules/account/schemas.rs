@@ -143,7 +143,6 @@ pub struct OpenWalletRequest {
     #[validate(length(min = 1, max = 255, message = "Last name is required"))]
     pub lastname: String,
 
-    #[validate(length(min = 1, max = 255, message = "Other name is required"))]
     pub othername: Option<String>,
 
     #[validate(length(min = 11, max = 11, message = "Phone number must be 11 digits"))]
