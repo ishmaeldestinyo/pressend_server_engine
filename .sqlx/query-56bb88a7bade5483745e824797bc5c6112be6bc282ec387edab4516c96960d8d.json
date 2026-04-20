@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts SET\n            pending_tier_upgrade = 3,\n            tier_upgrade_requested_at = NOW(),\n            updated_at = NOW()\n        WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56bb88a7bade5483745e824797bc5c6112be6bc282ec387edab4516c96960d8d"
+}

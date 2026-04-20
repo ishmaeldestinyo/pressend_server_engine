@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                fullname,\n                email,\n                account_type,\n                share_percentage,\n                legacy_message,\n                account_id,\n                bank_code,\n                bank_name,\n                account_number,\n                account_name\n            FROM legacy_next_of_kin\n            WHERE legacy_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "fullname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "account_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "share_percentage",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 5,
+        "name": "legacy_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "account_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "bank_code",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "bank_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "account_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "aca19a2cea55fa4feaf51ddebf7cb489ad8bdd33e5b9a9d576488b4a481c16cc"
+}

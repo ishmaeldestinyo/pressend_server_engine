@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tier Upgrade Approved</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header { background: #1a1a2e; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .header p { color: #a0a8c0; margin: 6px 0 0; font-size: 13px; }
+        .banner { background: #16a34a; padding: 24px 32px; text-align: center; }
+        .banner h2 { color: #ffffff; margin: 0; font-size: 20px; }
+        .banner p { color: #dcfce7; margin: 8px 0 0; font-size: 13px; }
+        .body { padding: 40px 32px; }
+        .body p { color: #374151; font-size: 15px; line-height: 1.7; margin-bottom: 16px; }
+        .info-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 20px; margin: 24px 0; }
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #dcfce7; font-size: 14px; }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: #64748b; }
+        .info-value { font-weight: 600; color: #15803d; }
+        .footer { background: #f9fafb; padding: 24px 32px; text-align: center; border-top: 1px solid #e2e8f0; }
+        .footer p { color: #9ca3af; font-size: 12px; margin: 0 0 4px; }
+        .footer a { color: #64748b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+            <p>Account Notification</p>
+        </div>
+        <div class="banner">
+            <h2>Tier {{ tier }} Upgrade Approved</h2>
+            <p>Your account has been successfully upgraded.</p>
+        </div>
+        <div class="body">
+            <p>Hi <strong>{{ firstname }}</strong>,</p>
+            <p>Great news! Your <strong>{{ app_name }}</strong> account has been successfully upgraded to <strong>Tier {{ tier }}</strong>. You now have access to higher transaction limits and additional features.</p>
+
+            <div class="info-box">
+                <div class="info-row">
+                    <span class="info-label">Account Tier</span>
+                    <span class="info-value">Tier {{ tier }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Status</span>
+                    <span class="info-value">Approved</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Approved On</span>
+                    <span class="info-value">{{ approved_at }}</span>
+                </div>
+            </div>
+
+            <p>Thank you for completing the verification process. If you have any questions about your new account features, please reach out to us.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2026 {{ app_name }}. All rights reserved.</p>
+            <p>Need help? <a href="mailto:{{ support_email }}">{{ support_email }}</a></p>
+        </div>
+    </div>
+</body>
+</html>

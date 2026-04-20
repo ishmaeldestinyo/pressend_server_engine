@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Closed</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            background-color: #f4f6f9;
+            color: #333;
+        }
+        .wrapper {
+            max-width: 600px;
+            margin: 40px auto;
+            background: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+        .header {
+            background: #1a1a2e;
+            padding: 40px;
+            text-align: center;
+        }
+        .header h1 {
+            color: #ffffff;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        .header p {
+            color: #a0a8c0;
+            font-size: 13px;
+            margin-top: 6px;
+        }
+        .farewell-banner {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 40px;
+            text-align: center;
+            border-bottom: 3px solid #e2e8f0;
+        }
+        .farewell-banner .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            display: block;
+        }
+        .farewell-banner h2 {
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .farewell-banner p {
+            color: #a0a8c0;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .body {
+            padding: 40px;
+        }
+        .greeting {
+            font-size: 16px;
+            color: #1a1a2e;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        .message {
+            font-size: 14px;
+            color: #555;
+            line-height: 1.8;
+            margin-bottom: 28px;
+        }
+        .info-box {
+            background: #f8f9fc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px 24px;
+            margin-bottom: 28px;
+        }
+        .info-box h3 {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1a1a2e;
+            margin-bottom: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .info-box p {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .info-box p:last-child { margin-bottom: 0; }
+        .info-box strong { color: #1a1a2e; }
+        .timeline {
+            margin-bottom: 28px;
+        }
+        .timeline h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 16px;
+        }
+        .timeline-item {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            align-items: flex-start;
+        }
+        .timeline-dot {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .dot-done { background: #dcfce7; }
+        .dot-pending { background: #fef9c3; }
+        .dot-final { background: #fee2e2; }
+        .timeline-content p {
+            font-size: 13px;
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 2px;
+        }
+        .timeline-content span {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .warning-box {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-radius: 8px;
+            padding: 20px 24px;
+            margin-bottom: 28px;
+        }
+        .warning-box strong {
+            display: block;
+            font-size: 14px;
+            color: #92400e;
+            margin-bottom: 8px;
+        }
+        .warning-box p {
+            font-size: 13px;
+            color: #78350f;
+            line-height: 1.6;
+        }
+        .warning-box a {
+            color: #92400e;
+            font-weight: 600;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #e2e8f0;
+            margin: 28px 0;
+        }
+        .feedback {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .feedback p {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 12px;
+            line-height: 1.6;
+        }
+        .footer {
+            background: #f8f9fc;
+            padding: 28px 40px;
+            text-align: center;
+            border-top: 1px solid #e2e8f0;
+        }
+        .footer p {
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.6;
+            margin-bottom: 6px;
+        }
+        .footer a { color: #64748b; text-decoration: underline; }
+        .footer .app-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+
+        <!-- Header -->
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+            <p>Account Notification</p>
+        </div>
+
+        <!-- Farewell Banner -->
+        <div class="farewell-banner">
+            <span class="icon">👋</span>
+            <h2>Your Account Has Been Closed</h2>
+            <p>We're truly sorry to see you go. It's been an honour serving you.</p>
+        </div>
+
+        <!-- Body -->
+        <div class="body">
+            <p class="greeting">Hi {% if firstname and firstname != "" %}{{ firstname }}{% else %}there{% endif %},</p>
+
+            <p class="message">
+                As requested, your <strong>{{ app_name }}</strong> account has been successfully closed.
+                We've begun processing your data removal in accordance with our privacy policy.
+                All your personal data, transaction history, and account details will be permanently
+                erased within <strong>24 hours</strong>.
+            </p>
+
+            <!-- Account Info -->
+            <div class="info-box">
+                <h3>Closure Summary</h3>
+                <p><span>Account</span> <strong>{{ email }}</strong></p>
+                <p><span>Closed On</span> <strong>{{ deleted_at }}</strong></p>
+                {% if deletion_reason and deletion_reason != "" %}
+                <p><span>Reason</span> <strong>{{ deletion_reason }}</strong></p>
+                {% endif %}
+            </div>
+
+            <!-- Timeline -->
+            <div class="timeline">
+                <h3>What happens next</h3>
+                <div class="timeline-item">
+                    <div class="timeline-dot dot-done">✅</div>
+                    <div class="timeline-content">
+                        <p>Account access revoked</p>
+                        <span>You have been logged out of all devices.</span>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-dot dot-pending">⏳</div>
+                    <div class="timeline-content">
+                        <p>Data removal in progress</p>
+                        <span>Your personal data is being scheduled for deletion.</span>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-dot dot-final">🗑️</div>
+                    <div class="timeline-content">
+                        <p>Permanent deletion</p>
+                        <span>All data will be permanently erased within 24 hours.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Warning -->
+            <div class="warning-box">
+                <strong>⚠️ This action is irreversible</strong>
+                <p>
+                    Your account and all associated data cannot be recovered after deletion.
+                    If you believe this was a mistake or your account was compromised,
+                    please contact our support team immediately at
+                    <a href="mailto:{{ support_email }}">{{ support_email }}</a>
+                    before the 24-hour window closes.
+                </p>
+            </div>
+
+            <hr class="divider">
+
+            <!-- Feedback -->
+            <div class="feedback">
+                <p>
+                    We'd love to know how we could have done better.
+                    Your feedback helps us improve {{ app_name }} for everyone.
+                </p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p class="app-name">{{ app_name }}</p>
+            <p>This is an automated notification confirming your account closure request.</p>
+            <p>Need help? Contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a></p>
+            <p style="margin-top: 12px;">© 2026 {{ app_name }}. All rights reserved.</p>
+        </div>
+
+    </div>
+</body>
+</html>

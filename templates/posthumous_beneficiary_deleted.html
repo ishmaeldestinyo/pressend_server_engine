@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Legacy Plan Cancelled</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background-color: #f4f1ec;
+      font-family: 'DM Sans', sans-serif;
+      color: #1a1a1a;
+      padding: 40px 16px;
+    }
+
+    .wrapper {
+      max-width: 580px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .header .app-name {
+      font-family: 'DM Serif Display', serif;
+      font-size: 22px;
+      letter-spacing: 0.5px;
+      color: #1a1a1a;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid #e5e0d8;
+    }
+
+    /* ── Banner ── */
+    .banner {
+      background: #1a1a1a;
+      padding: 40px 40px 36px;
+      text-align: center;
+    }
+
+    .banner .icon {
+      width: 56px;
+      height: 56px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+
+    .banner .icon svg {
+      width: 26px;
+      height: 26px;
+    }
+
+    .banner h1 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 26px;
+      color: #ffffff;
+      line-height: 1.3;
+      font-weight: 400;
+    }
+
+    .banner p {
+      margin-top: 10px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.5);
+      font-weight: 300;
+      letter-spacing: 0.3px;
+    }
+
+    /* ── Body ── */
+    .body {
+      padding: 36px 40px;
+    }
+
+    .greeting {
+      font-size: 15px;
+      color: #444;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    .greeting strong {
+      color: #1a1a1a;
+      font-weight: 500;
+    }
+
+    /* ── Info Box ── */
+    .info-box {
+      background: #faf8f5;
+      border: 1px solid #e5e0d8;
+      border-left: 3px solid #c0a882;
+      border-radius: 8px;
+      padding: 20px 22px;
+      margin: 24px 0;
+    }
+
+    .info-box .label {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: #999;
+      margin-bottom: 6px;
+    }
+
+    .info-box .value {
+      font-size: 15px;
+      font-weight: 500;
+      color: #1a1a1a;
+    }
+
+    .info-box .sub {
+      font-size: 12px;
+      color: #888;
+      margin-top: 3px;
+    }
+
+    /* ── Divider ── */
+    .divider {
+      border: none;
+      border-top: 1px solid #ede9e2;
+      margin: 28px 0;
+    }
+
+    /* ── Message block ── */
+    .message {
+      font-size: 14px;
+      color: #555;
+      line-height: 1.75;
+    }
+
+    .message p + p {
+      margin-top: 14px;
+    }
+
+    /* ── Support CTA ── */
+    .support-block {
+      margin-top: 28px;
+      background: #faf8f5;
+      border: 1px solid #e5e0d8;
+      border-radius: 8px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .support-block .support-icon {
+      flex-shrink: 0;
+      width: 36px;
+      height: 36px;
+      background: #1a1a1a;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .support-block .support-icon svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .support-block .support-text {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.5;
+    }
+
+    .support-block .support-text a {
+      color: #1a1a1a;
+      font-weight: 500;
+      text-decoration: none;
+      border-bottom: 1px solid #c0a882;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      margin-top: 32px;
+      padding: 0 8px;
+    }
+
+    .footer .timestamp {
+      font-size: 11px;
+      color: #aaa;
+      letter-spacing: 0.3px;
+    }
+
+    .footer .legal {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #bbb;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <!-- Header -->
+    <div class="header">
+      <span class="app-name">{{ app_name }}</span>
+    </div>
+
+    <!-- Card -->
+    <div class="card">
+
+      <!-- Banner -->
+      <div class="banner">
+        <div class="icon">
+          <!-- Shield off icon -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s-8-4.5-8-11.8V5l8-3 8 3v6.2"/>
+            <line x1="2" y1="2" x2="22" y2="22"/>
+          </svg>
+        </div>
+        <h1>Legacy Plan Cancelled</h1>
+        <p>This is an automated transparency notice</p>
+      </div>
+
+      <!-- Body -->
+      <div class="body">
+
+        <p class="greeting">
+          Dear <strong>{{ beneficiary_name }}</strong>,
+        </p>
+
+        <!-- Info box -->
+        <div class="info-box">
+          <div class="label">Plan Owner</div>
+          <div class="value">{{ owner_name }}</div>
+          <div class="sub">has removed their legacy plan</div>
+        </div>
+
+        <hr class="divider"/>
+
+        <div class="message">
+          <p>
+            We're reaching out to let you know that <strong>{{ owner_name }}</strong> has cancelled
+            their legacy plan on <strong>{{ app_name }}</strong>. As part of this plan, you were
+            previously designated as a beneficiary.
+          </p>
+          <p>
+            As of <strong>{{ deleted_at }}</strong>, your beneficiary status under this plan
+            is no longer active. Any share allocation or message previously assigned to you
+            has been invalidated and will not be executed.
+          </p>
+          <p>
+            This notice is sent purely for your transparency and awareness. No action is
+            required from you at this time.
+          </p>
+        </div>
+
+        <!-- Support -->
+        <div class="support-block">
+          <div class="support-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <div class="support-text">
+            Have questions or concerns? Reach out to us at
+            <a href="mailto:{{ support_email }}">{{ support_email }}</a> — we're happy to help.
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p class="timestamp">Sent on {{ deleted_at }}</p>
+      <p class="legal">
+        This email was sent because you were listed as a beneficiary on {{ app_name }}.<br/>
+        You are receiving this as a transparency notice — no account or action is required.
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>

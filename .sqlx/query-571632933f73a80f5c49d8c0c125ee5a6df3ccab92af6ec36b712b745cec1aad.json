@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, fullname, email, phone, account_type, share_percentage,\n                  legacy_message, account_id, bank_code, bank_name,\n                  account_number, account_name, created_at\n           FROM legacy_next_of_kin\n           WHERE legacy_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "fullname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "phone",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "account_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "share_percentage",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 6,
+        "name": "legacy_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "account_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "bank_code",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "bank_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "571632933f73a80f5c49d8c0c125ee5a6df3ccab92af6ec36b712b745cec1aad"
+}

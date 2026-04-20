@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO vas_transactions\n            (account_id, vas_type, provider, recipient, amount, currency,\n             reference, debit_account, status, response_code,\n             response_message, meta)\n        VALUES\n            ($1, $2, $3, $4, $5, 'NGN', $6, $7, $8, $9, $10, $11)\n        ON CONFLICT (reference) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Numeric",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "995c632b3603f8212b2d758af406122f06a3211b2ee6866aeaecd388dcdedf5c"
+}

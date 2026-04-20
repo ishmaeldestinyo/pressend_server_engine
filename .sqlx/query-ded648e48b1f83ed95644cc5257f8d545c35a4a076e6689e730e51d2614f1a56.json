@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_contact_history\n               (account_id, field, old_value, new_value, changed_at)\n               VALUES ($1, 'password', '[hashed]', '[hashed]', NOW())\n               ON CONFLICT (account_id, field, old_value, new_value) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ded648e48b1f83ed95644cc5257f8d545c35a4a076e6689e730e51d2614f1a56"
+}

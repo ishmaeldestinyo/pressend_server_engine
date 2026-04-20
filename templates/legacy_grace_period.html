@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Legacy Plan Triggered</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #f1f5f9; font-family: 'Segoe UI', Arial, sans-serif; }
+        .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+        .header { background: linear-gradient(135deg, #f59e0b, #d97706); padding: 40px; text-align: center; }
+        .header h1 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
+        .header p { font-size: 14px; color: rgba(255,255,255,0.85); margin-top: 6px; }
+        .banner { background: #fffbeb; border-left: 4px solid #f59e0b; margin: 32px 40px 0; padding: 20px 24px; border-radius: 0 12px 12px 0; }
+        .banner .icon { font-size: 32px; display: block; margin-bottom: 10px; }
+        .banner h2 { font-size: 18px; font-weight: 700; color: #92400e; margin-bottom: 6px; }
+        .banner p { font-size: 14px; color: #78350f; line-height: 1.6; }
+        .body { padding: 32px 40px; }
+        .body p { font-size: 14px; color: #475569; line-height: 1.8; margin-bottom: 16px; }
+        .body p strong { color: #1e293b; }
+        .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px 24px; margin: 24px 0; }
+        .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
+        .info-row:last-child { border-bottom: none; }
+        .info-row .label { font-size: 13px; color: #64748b; }
+        .info-row .value { font-size: 13px; font-weight: 600; color: #1e293b; }
+        .action-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 22px 24px; margin: 24px 0; text-align: center; }
+        .action-box .action-title { font-size: 15px; font-weight: 700; color: #92400e; margin-bottom: 8px; }
+        .action-box p { font-size: 13px; color: #78350f; line-height: 1.6; margin: 0; }
+        .warning { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 14px 18px; margin-top: 8px; }
+        .warning p { font-size: 13px; color: #b91c1c; margin: 0; line-height: 1.6; }
+        .footer { background: #f8f9fc; padding: 28px 40px; text-align: center; border-top: 1px solid #e2e8f0; }
+        .footer .app-name { font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 8px; }
+        .footer p { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-bottom: 6px; }
+        .footer a { color: #64748b; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+            <p>Legacy Plan Notification</p>
+        </div>
+
+        <div class="banner">
+            <span class="icon"></span>
+            <h2>Your Legacy Plan Has Been Triggered</h2>
+            <p>Inactivity has been detected on your account and your legacy plan is now active.</p>
+        </div>
+
+        <div class="body">
+            <p>Dear <strong>{{ firstname }}</strong>,</p>
+
+            <p>
+                Your {{ app_name }} account has been inactive for 
+                <strong>{{ inactivity_days }} days</strong>, which has triggered your legacy plan.
+                Your assets will be automatically distributed to your 
+                <strong>
+                    {{ beneficiary_count }} designated
+                    {% if beneficiary_count == 1 %}
+                        beneficiary
+                    {% else %}
+                        beneficiaries
+                    {% endif %}
+                </strong>
+                after the grace period expires — unless you log in and cancel this process.
+            </p>
+
+            <div class="info-box">
+                <div class="info-row">
+                    <span class="label">Inactivity Period</span>
+                    <span class="value">{{ inactivity_days }} days</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Grace Period</span>
+                    <span class="value">{{ grace_period_days }} days</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Scheduled Execution</span>
+                    <span class="value">{{ execution_date }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Number of Beneficiaries</span>
+                    <span class="value">{{ beneficiary_count }}</span>
+                </div>
+            </div>
+
+            <div class="action-box">
+                <div class="action-title">Want to cancel this?</div>
+                <p>
+                    Open the <strong>{{ app_name }}</strong> app and log in to your account.
+                    Navigate to <strong>Legacy Plan</strong> settings and cancel the execution
+                    before <strong>{{ execution_date }}</strong>.
+                    Once the grace period expires, transfers <strong>cannot be reversed</strong>.
+                </p>
+            </div>
+
+            <div class="warning">
+                <p>
+                    If you did not set up a legacy plan or believe this is an error,
+                    please contact our support team immediately at
+                    <a href="mailto:{{ support_email }}">{{ support_email }}</a>.
+                </p>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="app-name">{{ app_name }}</div>
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>Need help? <a href="mailto:{{ support_email }}">{{ support_email }}</a></p>
+        </div>
+
+    </div>
+</body>
+</html>

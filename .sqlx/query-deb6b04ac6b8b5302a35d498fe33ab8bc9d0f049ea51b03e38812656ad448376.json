@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legacy_next_of_kin\n                   SET fullname         = COALESCE($1, fullname),\n                       email            = $2,\n                       phone            = COALESCE($3, phone),\n                       share_percentage = $4,\n                       legacy_message   = $5,\n                       bank_code        = COALESCE($6, bank_code),\n                       bank_name        = COALESCE($7, bank_name),\n                       account_number   = COALESCE($8, account_number),\n                       account_name     = COALESCE($9, account_name)\n                   WHERE id = $10",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Float8",
+        "Text",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "deb6b04ac6b8b5302a35d498fe33ab8bc9d0f049ea51b03e38812656ad448376"
+}

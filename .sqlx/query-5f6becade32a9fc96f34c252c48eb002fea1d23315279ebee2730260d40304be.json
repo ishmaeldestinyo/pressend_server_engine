@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id, firstname, lastname, othername, phone_number,\n                email, account_number, account_name, account_type, current_tier\n            FROM accounts\n            WHERE\n                deleted_at IS NULL\n                AND (\n                    -- Search by identifiers\n                    TRIM(account_number::TEXT) = $1\n                    OR TRIM(phone_number) = $1\n                    OR LOWER(TRIM(email)) = $1\n\n                    -- Search by the name part after '/'\n                    OR LOWER(SPLIT_PART(account_name, '/', 2)) LIKE $2\n                    \n                    -- Search the whole name (fallback for names without / or with spaces)\n                    OR LOWER(account_name) LIKE $2\n                    \n                    -- Individual name fields\n                    OR LOWER(firstname) LIKE $2\n                    OR LOWER(lastname) LIKE $2\n                )\n            LIMIT 11\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "firstname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "lastname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "othername",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "phone_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "account_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "current_tier",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "5f6becade32a9fc96f34c252c48eb002fea1d23315279ebee2730260d40304be"
+}

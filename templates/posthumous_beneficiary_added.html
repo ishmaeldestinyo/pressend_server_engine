@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>You've Been Added as a Beneficiary</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background-color: #f0ede8;
+      font-family: 'DM Sans', sans-serif;
+      color: #1a1a1a;
+      padding: 40px 16px;
+    }
+
+    .wrapper {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      background-color: #0f1923;
+      border-radius: 16px 16px 0 0;
+      padding: 36px 40px 28px;
+      text-align: center;
+    }
+
+    .header .logo {
+      font-family: 'DM Serif Display', serif;
+      font-size: 28px;
+      color: #e8c97e;
+      letter-spacing: 1px;
+    }
+
+    .header .tagline {
+      font-size: 12px;
+      color: #7a8a99;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      background: linear-gradient(135deg, #1a2f45 0%, #0f1923 100%);
+      padding: 40px 40px 32px;
+      text-align: center;
+      border-top: 1px solid #1e3148;
+    }
+
+    .hero .badge {
+      display: inline-block;
+      background-color: rgba(232, 201, 126, 0.15);
+      border: 1px solid rgba(232, 201, 126, 0.4);
+      color: #e8c97e;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      padding: 6px 16px;
+      border-radius: 100px;
+      margin-bottom: 20px;
+    }
+
+    .hero h1 {
+      font-family: 'DM Serif Display', serif;
+      font-size: 32px;
+      color: #ffffff;
+      line-height: 1.25;
+      margin-bottom: 14px;
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: #e8c97e;
+    }
+
+    .hero p {
+      font-size: 15px;
+      color: #a0b0c0;
+      line-height: 1.7;
+      max-width: 420px;
+      margin: 0 auto;
+    }
+
+    /* ── Body card ── */
+    .body-card {
+      background-color: #ffffff;
+      padding: 40px 40px 32px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #8a96a3;
+      margin-bottom: 16px;
+    }
+
+    /* ── Info table ── */
+    .info-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 32px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #e8eaed;
+    }
+
+    .info-table tr:not(:last-child) td {
+      border-bottom: 1px solid #e8eaed;
+    }
+
+    .info-table td {
+      padding: 14px 18px;
+      font-size: 14px;
+      vertical-align: middle;
+    }
+
+    .info-table td:first-child {
+      width: 42%;
+      color: #6b7785;
+      font-weight: 500;
+      background-color: #f8f9fa;
+    }
+
+    .info-table td:last-child {
+      color: #0f1923;
+      font-weight: 600;
+    }
+
+    .share-pill {
+      display: inline-block;
+      background-color: #e8f4ec;
+      color: #1a7a42;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 100px;
+      border: 1px solid #b8dfc4;
+    }
+
+    /* ── Notice box ── */
+    .notice {
+      background-color: #fdf8ee;
+      border-left: 4px solid #e8c97e;
+      border-radius: 0 8px 8px 0;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+    }
+
+    .notice p {
+      font-size: 13.5px;
+      color: #5a4a1a;
+      line-height: 1.65;
+    }
+
+    .notice strong {
+      color: #3a2e0a;
+    }
+
+    /* ── Divider ── */
+    .divider {
+      height: 1px;
+      background: linear-gradient(to right, transparent, #e0e3e8, transparent);
+      margin: 28px 0;
+    }
+
+    /* ── What happens next ── */
+    .steps {
+      margin-bottom: 32px;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .step-num {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      background-color: #0f1923;
+      color: #e8c97e;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 1px;
+    }
+
+    .step-text strong {
+      display: block;
+      font-size: 14px;
+      color: #0f1923;
+      margin-bottom: 2px;
+    }
+
+    .step-text span {
+      font-size: 13px;
+      color: #6b7785;
+      line-height: 1.55;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      background-color: #0f1923;
+      border-radius: 0 0 16px 16px;
+      padding: 28px 40px;
+      text-align: center;
+    }
+
+    .footer p {
+      font-size: 12.5px;
+      color: #5a6a7a;
+      line-height: 1.7;
+      margin-bottom: 6px;
+    }
+
+    .footer a {
+      color: #e8c97e;
+      text-decoration: none;
+    }
+
+    .footer .copyright {
+      font-size: 11px;
+      color: #3a4a5a;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid #1e3148;
+    }
+
+    @media (max-width: 480px) {
+      .header, .hero, .body-card, .footer { padding-left: 24px; padding-right: 24px; }
+      .hero h1 { font-size: 26px; }
+      .info-table td:first-child { width: 46%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">{{ app_name }}</div>
+      <div class="tagline">Secure · Trusted · Always There</div>
+    </div>
+
+    <!-- Hero -->
+    <div class="hero">
+      <div class="badge">Beneficiary Notification</div>
+      <h1>You've been named<br/>a <em>beneficiary</em></h1>
+      <p>
+        <strong style="color:#d0dde8;">{{ owner_name }}</strong> has designated you as a beneficiary
+        on their {{ app_name }} posthumous plan. This means a portion of their assets
+        is allocated to you.
+      </p>
+    </div>
+
+    <!-- Body -->
+    <div class="body-card">
+
+      <div class="section-label">Beneficiary Details</div>
+
+      <table class="info-table">
+        <tr>
+          <td>Your Name</td>
+          <td>{{ beneficiary_name }}</td>
+        </tr>
+        <tr>
+          <td>Designated By</td>
+          <td>{{ owner_name }}</td>
+        </tr>
+        <tr>
+          <td>Your Share</td>
+          <td><span class="share-pill">{{ share_percentage }}% of allocation</span></td>
+        </tr>
+        <tr>
+          <td>Plan Type</td>
+          <td>Posthumous Distribution Plan</td>
+        </tr>
+        <tr>
+          <td>Notification Date</td>
+          <td>{{ added_at }}</td>
+        </tr>
+      </table>
+
+      <!-- Notice -->
+      <div class="notice">
+        <p>
+          <strong>What does this mean?</strong> In the event that <strong>{{ owner_name }}</strong>
+          becomes inactive on {{ app_name }} for a designated period, this plan will be
+          triggered and your allocated share will be transferred to you automatically.
+          No action is required from you at this time.
+        </p>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Steps -->
+      <div class="section-label">What Happens Next</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-text">
+            <strong>No action needed now</strong>
+            <span>You have been successfully recorded as a beneficiary. Simply keep your {{ app_name }} account active.</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-text">
+            <strong>Plan activation</strong>
+            <span>If the plan is ever triggered, you will receive a separate notification with full details and next steps.</span>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-text">
+            <strong>Funds transfer</strong>
+            <span>Your designated share ({{ share_percentage }}%) will be transferred to your registered {{ app_name }} account or bank account at that time.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <p style="font-size:13px; color:#6b7785; line-height:1.7;">
+        If you believe you received this email in error or have questions about this plan,
+        please reach out to our support team at
+        <a href="mailto:{{ support_email }}" style="color:#0f1923; font-weight:600;">{{ support_email }}</a>.
+        We are always happy to help.
+      </p>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>This is an automated notification from <strong style="color:#a0b0c0;">{{ app_name }}</strong>.</p>
+      <p>Please do not reply directly to this email.</p>
+      <p>Need help? Contact us at <a href="mailto:{{ support_email }}">{{ support_email }}</a></p>
+      <div class="copyright">
+        &copy; {{ app_name }}. All rights reserved.<br/>
+        You are receiving this because you were named a beneficiary by a {{ app_name }} user.
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

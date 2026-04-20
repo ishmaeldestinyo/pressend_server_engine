@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE beneficiaries\n        SET deleted_at = NOW(), updated_at = NOW()\n        WHERE id = $1\n          AND account_id = $2\n          AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb5d6d4a0cce49a93f50fb1eb3a4dd6a58cfc80991fbf49cd534593cd967fbc4"
+}

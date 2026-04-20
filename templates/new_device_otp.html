@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Email</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header { background: #2563EB; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .body { padding: 40px 32px; }
+        .body p { color: #374151; font-size: 16px; line-height: 1.6; }
+        .otp-box { background: #EFF6FF; border: 2px dashed #2563EB; border-radius: 8px; text-align: center; padding: 24px; margin: 32px 0; }
+        .otp-code { font-size: 40px; font-weight: bold; color: #2563EB; letter-spacing: 8px; }
+        .expiry { color: #6B7280; font-size: 14px; margin-top: 8px; }
+        .footer { background: #F9FAFB; padding: 24px 32px; text-align: center; }
+        .footer p { color: #9CA3AF; font-size: 12px; margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+        </div>
+        <div class="body">
+            <p>Hi <strong>{{ firstname }}</strong>,</p>
+            <p>We detected a sign-in attempt to your account from a new device. Use the OTP below to verify your identity before access is granted.</p>
+            <div class="otp-box">
+                <div class="otp-code">{{ otp }}</div>
+                <div class="expiry">Expires in {{ expires_in }}</div>
+            </div>
+             <p>If you did not attempt to sign in, your account may be at risk. Please contact us immediately at <a href="mailto:{{ support_email }}">{{ support_email }}</a> and change your password.</p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2025 {{ app_name }}. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

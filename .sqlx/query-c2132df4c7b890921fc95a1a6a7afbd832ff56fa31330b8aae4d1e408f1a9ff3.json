@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legacy_plans\n            (account_id, inactivity_days, grace_period_days, status,\n             notify_beneficiaries, last_activity_at, created_at, updated_at)\n        VALUES ($1, $2, $3, 'active', $4, NOW(), NOW(), NOW())\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c2132df4c7b890921fc95a1a6a7afbd832ff56fa31330b8aae4d1e408f1a9ff3"
+}

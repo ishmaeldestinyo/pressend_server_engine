@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, product_type, recipient, service_name, service_code, label, created_at\n        FROM beneficiaries\n        WHERE account_id = $1 AND deleted_at IS NULL\n        ORDER BY created_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "recipient",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "service_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "service_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "1fad144fcf3d30dd2cd68c5dd2c8c06fbe0fc7b16a469bb8a42e43180945d8e3"
+}

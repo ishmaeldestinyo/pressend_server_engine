@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legacy_plans SET status = 'partial_failure', updated_at = NOW() WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f0381627bc90d31f0f9ab8beecd8517d1a097b94991dcce0813def1a80924d6"
+}

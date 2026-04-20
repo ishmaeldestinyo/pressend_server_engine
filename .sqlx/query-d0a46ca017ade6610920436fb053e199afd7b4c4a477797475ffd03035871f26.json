@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            vas_type,\n            COALESCE(network, provider)                                         AS provider_name,\n            COUNT(*)                                                            AS total,\n            SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END)                AS successful,\n            ROUND(\n                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0\n                / NULLIF(COUNT(*), 0), 2\n            )                                                                   AS success_rate\n        FROM vas_transactions\n        WHERE created_at >= NOW() - INTERVAL '7 days'\n        GROUP BY vas_type, COALESCE(network, provider)\n        ORDER BY vas_type, success_rate DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vas_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "provider_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "total",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "successful",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "success_rate",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d0a46ca017ade6610920436fb053e199afd7b4c4a477797475ffd03035871f26"
+}

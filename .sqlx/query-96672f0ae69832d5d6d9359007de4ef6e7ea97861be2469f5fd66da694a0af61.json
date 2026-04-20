@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT current_tier, status, pending_tier_upgrade, email,\n                account_number, account_name, bvn, nin\n         FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_tier",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "pending_tier_upgrade",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "bvn",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "nin",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "96672f0ae69832d5d6d9359007de4ef6e7ea97861be2469f5fd66da694a0af61"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE beneficiaries\n        SET\n            label        = COALESCE($1, label),\n            service_name = COALESCE($2, service_name),\n            updated_at   = NOW()\n        WHERE id = $3\n          AND account_id = $4\n          AND deleted_at IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4b56507b15520a232cb45a4181214834eed7be1e90b97db7dac18418ac5e440d"
+}

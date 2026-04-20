@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT account_number, device_token, firstname, email\n                           FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "device_token",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "firstname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "email",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "b9988e7ca81e9e092026bad41f2229b84f30ea15605912f27efd1806bb94c81b"
+}

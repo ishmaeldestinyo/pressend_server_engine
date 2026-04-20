@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts\n           SET deleted_at = NOW(),\n               deleted_reason = $1,\n               status = 'deleted',\n               updated_at = NOW()\n           WHERE id = $2 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5572141b444969c71fd5e458e6ab55f8899d583f50897c67f0f0710737fcee01"
+}

@@ -1,0 +1,91 @@
+[package]
+name = "blinq_server"
+version = "0.1.0"
+edition = "2024"
+default-run = "blinq_server"
+
+[[bin]]
+name = "blinq_server"
+path = "src/main.rs"
+
+[[bin]]
+name = "blinq_worker"
+path = "src/bin/worker.rs"
+
+[dependencies]
+
+actix-web = { version = "4" }
+actix-cors = "0.6" # CORS support
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "uuid", "chrono", "migrate", "bigdecimal"] }
+actix-governor = "0.5"
+bigdecimal = { version = "0.4", features = ["serde"] }
+
+dotenv = "0.15"
+dotenvy = "0.15"
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+
+uuid = { version = "1", features = ["serde", "v4"] }
+tokio = { version = "1", features = ["full"] }
+
+# validate incoming data
+validator = { version = "0.18", features = ["derive"] }
+regex = "1"
+lazy_static = "1"
+
+# For password hashing
+argon2 = "0.5"
+
+# Jwt
+jsonwebtoken = "9"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+
+# logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
+rand = "0.8"
+lettre = { version = "0.11.19", features = ["tokio1", "tokio1-native-tls", "builder"] }
+tera = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+log = "0.4"
+env_logger = "0.11"
+bcrypt = "0.19.0"
+env = "1.0.1"
+yup-oauth2 = "12.1.2"
+
+# For testing
+[dev-dependencies]
+actix-rt = "2"
+
+
+# HTTP client for 9PSB API calls
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Environment/config
+config = "0.13"
+
+# Decimal for money — never use f64 for money
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+rust_decimal_macros = "1"
+
+# Base64 for webhook auth + KYC images
+base64 = "0.21"
+
+rand = "0.8"
+
+
+tera = "1"
+
+
+[profile.dev]
+debug = 1

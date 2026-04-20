@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to {{ app_name }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header { background: #2563EB; padding: 32px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
+        .body { padding: 40px 32px; }
+        .body p { color: #374151; font-size: 16px; line-height: 1.6; }
+        .steps { background: #F9FAFB; border-radius: 8px; padding: 24px; margin: 24px 0; }
+        .step { display: flex; align-items: flex-start; margin-bottom: 16px; }
+        .step-number { background: #2563EB; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; }
+        .step-text { color: #374151; font-size: 15px; padding-top: 4px; }
+        .cta { text-align: center; margin: 32px 0; }
+        .cta a { background: #2563EB; color: white; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 16px; }
+        .footer { background: #F9FAFB; padding: 24px 32px; text-align: center; }
+        .footer p { color: #9CA3AF; font-size: 12px; margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Welcome to {{ app_name }}! 🎉</h1>
+        </div>
+        <div class="body">
+            <p>Hi <strong>{{ firstname }}</strong>,</p>
+            <p>Your account has been verified. Here's how to get started:</p>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-text"><strong>Complete your profile</strong> — Add your personal details</div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-text"><strong>Upgrade to Tier 1</strong> — Provide your BVN or NIN to activate your wallet</div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-text"><strong>Fund your wallet</strong> — Add money and start transacting</div>
+                </div>
+            </div>
+            <p>If you have any questions, reach us at <a href="mailto:support@blinq.com.ng">support@blinq.com.ng</a></p>
+        </div>
+        <div class="footer">
+            <p>&copy; 2025 {{ app_name }}. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM palm_enrollments\n     WHERE account_id = $1 AND palm_type = 'main' AND is_active = TRUE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a4f98cef6704cce4108a34b24702c538e58dee7d5f9fc5bc7092e708f0e1ad50"
+}

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Legacy Plan Executed</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #f1f5f9; font-family: 'Segoe UI', Arial, sans-serif; }
+        .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+        .header { background: linear-gradient(135deg, #0085fb, #0066cc); padding: 40px; text-align: center; }
+        .header h1 { font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: -0.5px; }
+        .header p { font-size: 14px; color: rgba(255,255,255,0.85); margin-top: 6px; }
+        .banner { background: #f0fdf4; border-left: 4px solid #16a34a; margin: 32px 40px 0; padding: 20px 24px; border-radius: 0 12px 12px 0; }
+        .banner .icon { font-size: 32px; display: block; margin-bottom: 10px; }
+        .banner h2 { font-size: 18px; font-weight: 700; color: #14532d; margin-bottom: 6px; }
+        .banner p { font-size: 14px; color: #166534; line-height: 1.6; }
+        .body { padding: 32px 40px; }
+        .body p { font-size: 14px; color: #475569; line-height: 1.8; margin-bottom: 16px; }
+        .body p strong { color: #1e293b; }
+        .info-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px 24px; margin: 24px 0; }
+        .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #e2e8f0; }
+        .info-row:last-child { border-bottom: none; }
+        .info-row .label { font-size: 13px; color: #64748b; }
+        .info-row .value { font-size: 13px; font-weight: 600; color: #1e293b; }
+        .section-title { font-size: 14px; font-weight: 700; color: #1e293b; margin-bottom: 12px; margin-top: 8px; }
+        .bene-item { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .bene-left .name { font-size: 13px; font-weight: 600; color: #1e293b; }
+        .bene-left .detail { font-size: 12px; color: #64748b; margin-top: 3px; }
+        .bene-right { font-size: 15px; font-weight: 700; color: #0085fb; white-space: nowrap; margin-left: 12px; }
+        .footer { background: #f8f9fc; padding: 28px 40px; text-align: center; border-top: 1px solid #e2e8f0; }
+        .footer .app-name { font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 8px; }
+        .footer p { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-bottom: 6px; }
+        .footer a { color: #64748b; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+
+        <div class="header">
+            <h1>{{ app_name }}</h1>
+            <p>Legacy Plan Notification</p>
+        </div>
+
+        <div class="banner">
+            <h2>Your Legacy Plan Has Been Executed</h2>
+            <p>All designated transfers have been completed successfully.</p>
+        </div>
+
+        <div class="body">
+            <p>Dear <strong>{{ firstname }}</strong>,</p>
+            <p>
+                Your legacy plan on {{ app_name }} has been fully executed.
+                The following distributions have been made from your wallet
+                as per your instructions.
+            </p>
+
+            <div class="info-box">
+                <div class="info-row">
+                    <span class="label">Execution Date</span>
+                    <span class="value">{{ execution_date }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Total Distributed</span>
+                    <span class="value">₦{{ total_distributed }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="label">Number of Beneficiaries</span>
+                    <span class="value">{{ beneficiary_count }}</span>
+                </div>
+            </div>
+
+            <p class="section-title">Distribution Breakdown</p>
+            {% for b in beneficiaries %}
+            <div class="bene-item">
+                <div class="bene-left">
+                    <div class="name">{{ b.name }}</div>
+                    <div class="detail">{{ b.share_percentage }}% share · {{ b.transfer_type }}</div>
+                </div>
+                <div class="bene-right">₦{{ b.net_amount }}</div>
+            </div>
+            {% endfor %}
+
+            <p style="margin-top: 24px;">
+                This action was carried out automatically in accordance with your
+                legacy plan settings. If you have any questions, please reach out
+                to our support team.
+            </p>
+        </div>
+
+        <div class="footer">
+            <div class="app-name">{{ app_name }}</div>
+            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>Need help? <a href="mailto:{{ support_email }}">{{ support_email }}</a></p>
+        </div>
+
+    </div>
+</body>
+</html>

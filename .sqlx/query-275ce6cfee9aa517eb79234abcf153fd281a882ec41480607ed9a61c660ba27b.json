@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legacy_plans\n           SET deleted_at = NOW(), updated_at = NOW()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "275ce6cfee9aa517eb79234abcf153fd281a882ec41480607ed9a61c660ba27b"
+}

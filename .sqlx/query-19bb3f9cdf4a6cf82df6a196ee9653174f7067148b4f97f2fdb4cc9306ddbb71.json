@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, field, old_value, new_value, registered_at, changed_at\n               FROM account_contact_history\n               WHERE account_id = $1\n               ORDER BY registered_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "field",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "old_value",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "new_value",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "registered_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "changed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "19bb3f9cdf4a6cf82df6a196ee9653174f7067148b4f97f2fdb4cc9306ddbb71"
+}

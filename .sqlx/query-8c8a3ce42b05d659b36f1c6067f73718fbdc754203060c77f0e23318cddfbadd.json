@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts SET\n            account_number   = $2,\n            account_name     = $3,\n            firstname        = $4,\n            lastname         = $5,\n            othername        = $6,\n            bank_name        = $7,\n            bvn              = $8,\n            nin              = $9,\n            nin_userid       = $10,\n            phone_number     = $11,\n            address          = $12,\n            date_of_birth    = $13,\n            gender           = $14,\n            current_tier=1,\n            tier_upgraded_at=  NOW(),\n            updated_at       = NOW()\n        WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c8a3ce42b05d659b36f1c6067f73718fbdc754203060c77f0e23318cddfbadd"
+}

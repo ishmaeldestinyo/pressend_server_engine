@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legacy_next_of_kin\n                   (legacy_id, fullname, email, phone, account_type, share_percentage,\n                    legacy_message, account_id, bank_code, bank_name, account_number, account_name)\n                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Float8",
+        "Text",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e16275157a90356fcd266b53b52986d0c6d8d7cfbd5c0e2b9d6bd51443c78784"
+}
