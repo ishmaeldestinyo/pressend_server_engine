@@ -224,6 +224,7 @@ pub async fn signin(
     cfg: web::Data<Config>,
     req: HttpRequest,
 ) -> impl Responder {
+    // 1. Validate Input
     if let Err(errors) = body.0.validate() {
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
             status: "error",
@@ -259,7 +260,7 @@ pub async fn signin(
         .unwrap_or("unknown")
         .to_string();
 
-    // ── Check if currently locked out ─────────────────────────────────────────
+    // 2. Check if currently locked out
     let lockout_until: Option<String> = redis::cmd("GET")
         .arg(&lockout_key)
         .query_async(&mut redis_conn)
@@ -283,7 +284,7 @@ pub async fn signin(
         });
     }
 
-    // ── Fetch account ──────────────────────────────────────────────────────────
+    // 3. Fetch account
     let account = sqlx::query!(
         "SELECT id, email, password_hash, status, device_id, is_2fa_enabled, firstname
          FROM accounts WHERE email = $1 AND deleted_at IS NULL",
@@ -301,7 +302,7 @@ pub async fn signin(
             });
         }
         Err(e) => {
-            println!("[signin] DB error: {}", e);
+            eprintln!("[signin] DB error: {}", e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -309,7 +310,7 @@ pub async fn signin(
         }
     };
 
-    // ── Verify password on blocking thread ─────────────────────────────────────
+    // 4. Verify password on blocking thread
     let password_hash = row.password_hash.clone();
     let input_password = body.password.clone();
 
@@ -318,8 +319,8 @@ pub async fn signin(
             .await
             .unwrap_or(Ok(false));
 
+    // 5. Handle Incorrect Password
     if !matches!(is_valid, Ok(true)) {
-        // ── Increment failed attempts ──────────────────────────────────────────
         let current_trials: i64 = redis::cmd("INCR")
             .arg(&trials_key)
             .query_async(&mut redis_conn)
@@ -334,7 +335,6 @@ pub async fn signin(
 
         let attempts_left = TRIALS_PER_BLOCK - (current_trials % TRIALS_PER_BLOCK);
 
-        // ── Boundary hit — trigger lockout ─────────────────────────────────────
         if current_trials % TRIALS_PER_BLOCK == 0 {
             let block = ((current_trials / TRIALS_PER_BLOCK) - 1)
                 .min(LOCKOUT_SEQUENCE.len() as i64 - 1) as usize;
@@ -354,7 +354,6 @@ pub async fn signin(
                 .query_async(&mut redis_conn)
                 .await;
 
-            // ── Fire suspicious login event ────────────────────────────────────
             let event = SuspiciousLoginEvent {
                 account_id: row.id.to_string(),
                 email: row.email.clone(),
@@ -390,13 +389,15 @@ pub async fn signin(
         });
     }
 
-    // ── Successful login — clear all lockout state ─────────────────────────────
+    // ── ✅ PASSWORD CORRECT START ──────────────────────────────────────────────
+    
+    // 6. IMMEDIATELY Clear all lockout state upon correct password
     let _: Result<(), _> = redis::cmd("DEL")
         .arg(&[&lockout_key, &trials_key, &block_key])
         .query_async(&mut redis_conn)
         .await;
 
-    // ── Check account status ───────────────────────────────────────────────────
+    // 7. Check account status
     match row.status.as_str() {
         "suspended" => {
             return HttpResponse::Forbidden().json(ApiResponse {
@@ -406,16 +407,14 @@ pub async fn signin(
         }
         "deleted" => {
             return HttpResponse::Forbidden().json(ApiResponse {
-                message:
-                    "This account no longer exists. If this was a mistake, please contact support."
-                        .into(),
+                message: "This account no longer exists. If this was a mistake, please contact support.".into(),
                 status: ResponseStatus::ERROR,
             });
         }
         _ => {}
     }
 
-    // ── New or different device — send OTP before granting tokens ──────────────
+    // 8. New device detection (Needs OTP)
     if row.device_id.as_deref() != Some(body.device_id.as_str()) {
         let otp = generate_otp();
         let otp_key = format!("{}.new_device.otp", email);
@@ -443,14 +442,12 @@ pub async fn signin(
         );
 
         return HttpResponse::Forbidden().json(ApiResponse {
-            message:
-                "New device detected. Please verify your identity via the OTP sent to your email."
-                    .into(),
+            message: "New device detected. Please verify your identity via the OTP sent to your email.".into(),
             status: ResponseStatus::ERROR,
         });
     }
 
-    // ── 2FA check ──────────────────────────────────────────────────────────────
+    // 9. 2FA Check
     if row.is_2fa_enabled {
         return HttpResponse::Ok().json(serde_json::json!({
             "status": "success",
@@ -458,22 +455,16 @@ pub async fn signin(
             "requires_2fa": true,
         }));
     }
-    let ip = req
-        .connection_info()
-        .realip_remote_addr()
-        .unwrap_or("unknown")
-        .to_string();
 
-    // kafka sents login detected
+    // 10. Successful Login Notification
     let event = AccountLoggedInNotificationEvent {
         email: email.clone(),
         firstname: row.firstname.clone().unwrap_or_default(),
-        ip,
+        ip: ip.clone(),
     };
-
     kafka.publish(&kafka_cfg.kafka_account_login_successful, &email, &event);
 
-    // ── Generate tokens concurrently ───────────────────────────────────────────
+    // 11. Token Generation
     let account_id = row.id.to_string();
     let secret = cfg.jwt_secret.clone();
 
@@ -485,7 +476,7 @@ pub async fn signin(
     let access_token = match access_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[signin] Token error: {}", e);
+            eprintln!("[signin] Access Token error: {}", e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -496,7 +487,7 @@ pub async fn signin(
     let refresh_token = match refresh_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[signin] Token error: {}", e);
+            eprintln!("[signin] Refresh Token error: {}", e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -511,9 +502,6 @@ pub async fn signin(
         refresh_token: Some(refresh_token),
     })
 }
-
-
-
 
 
 pub async fn signin_new_device_verify(
@@ -938,6 +926,327 @@ pub async fn get_user_info(
 
 
 
+pub async fn verify_palmpayment(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+    body: web::Json<serde_json::Value>,
+) -> impl Responder {
+    let request_id = uuid::Uuid::new_v4().to_string(); // Unique ID to track this specific call
+    println!("\n🚀 [DEBUG START] verify_palmpayment | ID: {}", request_id);
+
+    // 1. Extract and log token status
+    let token = match auth.token {
+        Some(t) => {
+            println!("✅ Token found for request {}", request_id);
+            t
+        },
+        None => {
+            println!("❌ Missing token for request {}", request_id);
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    // 2. Log the incoming payload from React Native
+    let raw_payload = body.into_inner();
+    println!("📦 Incoming Payload (ID: {}): {}", request_id, serde_json::to_string_pretty(&raw_payload).unwrap_or_default());
+
+    let client = reqwest::Client::new();
+    let target_url = format!("{}/verify-payment", cfg.palm_api_url);
+    
+    println!("🔗 Forwarding to: {}", target_url);
+
+    // 3. Forward the raw JSON body to the Palm Service
+    let res = client
+        .post(&target_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&raw_payload) 
+        .send()
+        .await;
+
+    // 4. Handle and log the response
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            println!("📡 Palm Service Response Status (ID: {}): {}", request_id, status);
+
+            match response.json::<serde_json::Value>().await {
+                Ok(response_body) => {
+                    println!("✨ Palm Service Body (ID: {}): {}", request_id, serde_json::to_string_pretty(&response_body).unwrap_or_default());
+                    
+                    HttpResponse::build(
+                        actix_web::http::StatusCode::from_u16(status.as_u16())
+                            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                    )
+                    .json(response_body)
+                },
+                Err(e) => {
+                    println!("💥 Failed to parse Palm Service JSON (ID: {}): {:?}", request_id, e);
+                    HttpResponse::InternalServerError().json(ApiResponse {
+                        message: "Failed to parse palm service response".into(),
+                        status: ResponseStatus::ERROR,
+                    })
+                },
+            }
+        }
+        Err(e) => {
+            println!("🚨 Request to Palm Service FAILED (ID: {}): {:?}", request_id, e);
+            log::error!("Palm verify-payment request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
+
+
+
+pub async fn enroll_palm(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+    body: web::Json<serde_json::Value>,
+) -> impl Responder {
+    let token = match auth.token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/enroll", cfg.palm_api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body.into_inner())
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                )
+                .json(body),
+                Err(_) => HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Failed to parse palm service response".into(),
+                    status: ResponseStatus::ERROR,
+                }),
+            }
+        }
+        Err(e) => {
+            log::error!("Palm enroll request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
+
+
+pub async fn delete_palm(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let palm_type = path.into_inner();
+
+    let token = match auth.token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let res = client
+        .delete(format!("{}/palm/enrollment/{}", cfg.palm_api_url, palm_type))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                )
+                .json(body),
+                Err(_) => HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Failed to parse palm service response".into(),
+                    status: ResponseStatus::ERROR,
+                }),
+            }
+        }
+        Err(e) => {
+            log::error!("Palm delete request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
+
+pub async fn get_palm(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+) -> impl Responder {
+    let token = match auth.token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{}/palm", cfg.palm_api_url))  
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                )
+                .json(body),
+                Err(_) => HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Failed to parse palm service response".into(),
+                    status: ResponseStatus::ERROR,
+                }),
+            }
+        }
+        Err(e) => {
+            log::error!("Palm service request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
+
+
+pub async fn get_panic_status(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+) -> impl Responder {
+    let token = match auth.token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{}/palm/panic/status", cfg.palm_api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                )
+                .json(body),
+                Err(_) => HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Failed to parse palm service response".into(),
+                    status: ResponseStatus::ERROR,
+                }),
+            }
+        }
+        Err(e) => {
+            log::error!("Palm service request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
+
+pub async fn revoke_panic(
+    auth: AuthUser,
+    cfg: web::Data<crate::config::Config>,
+) -> impl Responder {
+    let token = match auth.token {
+        Some(t) => t,
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let res = client
+        .patch(format!("{}/palm/panic/revoke", cfg.palm_api_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+
+    match res {
+        Ok(response) => {
+            let status = response.status();
+            match response.json::<serde_json::Value>().await {
+                Ok(body) => HttpResponse::build(
+                    actix_web::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                )
+                .json(body),
+                Err(_) => HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Failed to parse palm service response".into(),
+                    status: ResponseStatus::ERROR,
+                }),
+            }
+        }
+        Err(e) => {
+            log::error!("Palm service request failed: {e}");
+            HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Palm service unavailable".into(),
+                status: ResponseStatus::ERROR,
+            })
+        }
+    }
+}
 
 pub async fn change_password(
     auth: AuthUser,

@@ -1,6 +1,7 @@
 use actix_web::HttpResponse;
 use validator::Validate;
 use serde::{Deserialize, Serialize};
+use rust_decimal::Decimal;
 
 // ── Resolve / verify bank account ─────────────────────────────────────────────
 #[derive(Debug, Deserialize, Serialize, Validate)]
@@ -84,6 +85,15 @@ pub struct ExternalTransferRequest {
     pub pin: String,
 }
 
+
+#[derive(Debug, Deserialize)]
+pub struct PalmPaymentRequest {
+    pub debit_account_number: String,
+    pub frames: Vec<String>,
+    pub front_camera: Option<bool>,
+    pub amount: Decimal,
+    pub note: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct BankSuccessRateRequest {

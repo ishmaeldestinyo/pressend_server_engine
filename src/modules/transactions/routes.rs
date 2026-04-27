@@ -1,24 +1,25 @@
-use crate::modules::transactions::handlers;
+use actix_governor::{Governor, GovernorConfig, governor::middleware::StateInformationMiddleware};
 use actix_web::web;
+use crate::modules::transactions::handlers;
+use crate::utils::rate_limit::UserOrIpKeyExtractor;
 
-pub fn config(cfg: &mut web::ServiceConfig) {
+type GovConfig = GovernorConfig<UserOrIpKeyExtractor, StateInformationMiddleware>;
+
+pub fn config(
+    cfg: &mut web::ServiceConfig,
+    mutating_gov: web::Data<GovConfig>
+) {
     cfg.service(
         web::scope("/transaction")
+            // ── Mutating: POST (Wrapped with Governor) ───────────────────
+            .route("/resolve-bank", web::post().to(handlers::resolve_bank_detail).wrap(Governor::new(&mutating_gov)))
+            .route("/transfer/internal", web::post().to(handlers::internal_transfer).wrap(Governor::new(&mutating_gov)))
+            .route("/transfer/external", web::post().to(handlers::external_transfer).wrap(Governor::new(&mutating_gov)))
+            .route("/fund", web::post().to(handlers::fund_wallet).wrap(Governor::new(&mutating_gov)))
+            .route("/success-rate", web::post().to(handlers::getbank_success_rate).wrap(Governor::new(&mutating_gov)))
+
+            // ── Read: GET (No Governor) ──────────────────────────────────
             .route("/", web::get().to(handlers::list_mytransaction))
-            .route("/banklist", web::get().to(handlers::list_bank))
-            .route(
-                "/resolve-bank",
-                web::post().to(handlers::resolve_bank_detail),
-            )
-            .route(
-                "/transfer/internal",
-                web::post().to(handlers::internal_transfer),
-            )
-            .route("/fund", web::post().to(handlers::fund_wallet))
-            .route("/success-rate", web::post().to(handlers::getbank_success_rate))
-            .route(
-                "/transfer/external",
-                web::post().to(handlers::external_transfer),
-            ),
+            .route("/banklist", web::get().to(handlers::list_bank)),
     );
 }

@@ -1629,6 +1629,8 @@ pub async fn handle_internal_transfer(
     );
 }
 
+
+
 // ── Inbound transfer from external bank (webhook → kafka → here) ──────────────
 
 pub async fn handle_transfer_inflow(
@@ -1932,8 +1934,8 @@ pub async fn handle_external_transfer(
         },
         "merchant": {
             "isFee":              false,
-            // "merchantFeeAccount": cfg._9psb_operational_account,
-            // "merchantFeeAmount":  "15" // 15+20=35 total fee for external transfer where 20 is 9psb charges
+            "merchantFeeAccount": "",
+            "merchantFeeAmount":  "" 
         }
     });
 

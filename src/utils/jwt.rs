@@ -17,6 +17,7 @@ pub struct Claims {
 
 pub struct AuthUser {
     pub id: String,
+    pub token: Option<String>, 
 }
 
 impl FromRequest for AuthUser {
@@ -33,7 +34,6 @@ impl FromRequest for AuthUser {
             }
         };
 
-        // ── Extract Bearer token from Authorization header ─────────────────
         let token = match req
             .headers()
             .get("Authorization")
@@ -50,7 +50,7 @@ impl FromRequest for AuthUser {
 
         match verify_token(&token, &secret) {
             Ok(claims) if claims.token_type == "access" => {
-                ready(Ok(AuthUser { id: claims.sub }))
+                ready(Ok(AuthUser { id: claims.sub, token: Some(token) })) 
             }
             Ok(_) => ready(Err(actix_web::error::ErrorUnauthorized(
                 "Invalid token type",
@@ -60,9 +60,7 @@ impl FromRequest for AuthUser {
             ))),
         }
     }
-}
-
-// ── Token generation ──────────────────────────────────────────────────────────
+}// ── Token generation ──────────────────────────────────────────────────────────
 
 pub fn generate_access_token(id: &str, secret: &str) -> Result<String, String> {
     let now = Utc::now().timestamp() as usize;
