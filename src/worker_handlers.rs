@@ -1385,7 +1385,7 @@ pub async fn handle_internal_transfer(
 ) {
     let event: InternalTransferInitiatedEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     };
@@ -1393,14 +1393,14 @@ pub async fn handle_internal_transfer(
     // ── Parse UUIDs once ──────────────────────────────────────────────────────
     let sender_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     };
 
     let reciever_uuid = match uuid::Uuid::parse_str(&event.reciever_id) {
         Ok(id) => id,
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     };
@@ -1442,7 +1442,7 @@ pub async fn handle_internal_transfer(
                 return;
             }
         }
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     }
@@ -1526,7 +1526,7 @@ pub async fn handle_internal_transfer(
                 return;
             }
         }
-        Err(e) => {
+        Err(_e) => {
             return;
         }
     }
