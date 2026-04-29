@@ -215,6 +215,7 @@ pub async fn verify_otp(
     })
 }
 
+
 pub async fn signin(
     body: web::Json<schemas::SignInRequest>,
     db: web::Data<sqlx::PgPool>,
@@ -390,7 +391,7 @@ pub async fn signin(
     }
 
     // ── ✅ PASSWORD CORRECT START ──────────────────────────────────────────────
-    
+
     // 6. IMMEDIATELY Clear all lockout state upon correct password
     let _: Result<(), _> = redis::cmd("DEL")
         .arg(&[&lockout_key, &trials_key, &block_key])
@@ -455,6 +456,21 @@ pub async fn signin(
             "requires_2fa": true,
         }));
     }
+
+    // 9b. Reset legacy plan activity clock — user is alive and logged in
+    let _ = sqlx::query!(
+        r#"UPDATE legacy_plans
+           SET last_activity_at = NOW(),
+               updated_at       = NOW()
+           WHERE account_id  = $1
+             AND status      = 'active'
+             AND executed_at IS NULL
+             AND deleted_at  IS NULL"#,
+        row.id
+    )
+    .execute(db.get_ref())
+    .await
+    .map_err(|e| eprintln!("[signin] Failed to reset legacy plan activity: {}", e));
 
     // 10. Successful Login Notification
     let event = AccountLoggedInNotificationEvent {

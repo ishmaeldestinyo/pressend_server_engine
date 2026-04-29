@@ -1344,6 +1344,39 @@ pub async fn handle_set_payment_pin(payload: &str, mailer: &Mailer) {
     }
 }
 
+/// Formats a numeric string into a comma-separated currency format.
+/// e.g. "100000" -> "100,000" | "1000000.50" -> "1,000,000.50"
+fn format_amount(amount: &str) -> String {
+    let amount = amount.trim();
+
+    let (integer_part, decimal_part) = if let Some(dot_pos) = amount.find('.') {
+        (&amount[..dot_pos], Some(&amount[dot_pos + 1..]))
+    } else {
+        (amount, None)
+    };
+
+    let formatted_integer = integer_part
+        .chars()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            if i > 0 && i % 3 == 0 {
+                vec![',', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    match decimal_part {
+        Some(dec) => format!("{}.{}", formatted_integer, dec),
+        None => formatted_integer,
+    }
+}
+
 pub async fn handle_internal_transfer(
     payload: &str,
     db: &PgPool,
@@ -1353,21 +1386,14 @@ pub async fn handle_internal_transfer(
     let event: InternalTransferInitiatedEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
-            println!("[worker/internal_transfer] Invalid payload: {}", e);
             return;
         }
     };
-
-    println!(
-        "[worker/internal_transfer] Processing — sender: {}, reciever: {}, amount: {}, ref: {}",
-        event.sender_account, event.recipient_account, event.amount, event.reference
-    );
 
     // ── Parse UUIDs once ──────────────────────────────────────────────────────
     let sender_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
         Err(e) => {
-            println!("[worker/internal_transfer] Invalid sender uuid: {}", e);
             return;
         }
     };
@@ -1375,10 +1401,12 @@ pub async fn handle_internal_transfer(
     let reciever_uuid = match uuid::Uuid::parse_str(&event.reciever_id) {
         Ok(id) => id,
         Err(e) => {
-            println!("[worker/internal_transfer] Invalid reciever uuid: {}", e);
             return;
         }
     };
+
+    // ── Format amount once for reuse across notifications ─────────────────────
+    let formatted_amount = format_amount(&event.amount);
 
     // ── 1. PSB debit sender ───────────────────────────────────────────────────
     let debit_payload = serde_json::json!({
@@ -1400,10 +1428,6 @@ pub async fn handle_internal_transfer(
         Ok(res) => {
             let status = res["status"].as_str().unwrap_or("").to_uppercase();
             if status != "SUCCESS" {
-                println!(
-                    "[worker/internal_transfer] Debit rejected — status: '{}', ref: {}",
-                    status, event.reference
-                );
                 let _ = insert_transaction(
                     db,
                     sender_uuid,
@@ -1419,10 +1443,6 @@ pub async fn handle_internal_transfer(
             }
         }
         Err(e) => {
-            println!(
-                "[worker/internal_transfer] PSB debit error — ref: {}, error: {}",
-                event.reference, e
-            );
             return;
         }
     }
@@ -1449,10 +1469,6 @@ pub async fn handle_internal_transfer(
         Ok(res) => {
             let status = res["status"].as_str().unwrap_or("").to_uppercase();
             if status != "SUCCESS" {
-                println!(
-                    "[worker/internal_transfer] Credit rejected — status: '{}', ref: {}",
-                    status, event.reference
-                );
                 // ── Debit succeeded but credit failed — record both ────────────
                 let failed_credit_ref = format!("{}-CR", event.reference);
                 let _ = tokio::join!(
@@ -1494,13 +1510,13 @@ pub async fn handle_internal_transfer(
                         "Pressend Transfer Issue",
                         &format!(
                             "Your transfer of ₦{} could not be completed. You will be refunded.",
-                            event.amount
+                            formatted_amount
                         ),
                         Some(serde_json::json!({
                             "route":     "NotificationDetail",
                             "service":   "transfer_sent",
                             "status":    "failed",
-                            "amount":    event.amount,
+                            "amount":    formatted_amount,
                             "reference": event.reference,
                             "narration": "Transfer could not be completed. Refund in progress.",
                         })),
@@ -1511,10 +1527,6 @@ pub async fn handle_internal_transfer(
             }
         }
         Err(e) => {
-            println!(
-                "[worker/internal_transfer] PSB credit error — ref: {}, error: {}",
-                event.reference, e
-            );
             return;
         }
     }
@@ -1552,8 +1564,8 @@ pub async fn handle_internal_transfer(
         println!("[worker/internal_transfer] Credit DB insert error: {}", e);
     }
 
-    // ── 4. Push notifications — both legs succeeded ───────────────────────────
-    // Fetch sender's name and token, and receiver's token
+    // ── 4. Push notification — sender only ────────────────────────────────────
+    // Receiver credit alert is handled by handle_transfer_inflow via PSB webhook
     let sender_info = sqlx::query!(
         "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
         sender_uuid
@@ -1561,12 +1573,31 @@ pub async fn handle_internal_transfer(
     .fetch_optional(db)
     .await;
 
-    let reciever_token = sqlx::query_scalar!(
-        "SELECT device_token FROM accounts WHERE id = $1",
+    let reciever_info = sqlx::query!(
+        "SELECT firstname, lastname FROM accounts WHERE id = $1",
         reciever_uuid
     )
     .fetch_optional(db)
     .await;
+
+    // ── Build recipient display name for sender notification ──────────────────
+    let recipient_display_name = match &reciever_info {
+        Ok(Some(row)) => {
+            let name = format!(
+                "{} {}",
+                row.firstname.as_deref().unwrap_or(""),
+                row.lastname.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string();
+            if name.is_empty() {
+                event.recipient_account.clone()
+            } else {
+                name
+            }
+        }
+        _ => event.recipient_account.clone(),
+    };
 
     // Notify Sender (Confirmation)
     if let Ok(Some(row)) = &sender_info {
@@ -1576,51 +1607,19 @@ pub async fn handle_internal_transfer(
                 "Transfer Successful",
                 &format!(
                     "₦{} sent successfully to {}",
-                    event.amount, event.recipient_account
+                    formatted_amount, recipient_display_name
                 ),
                 Some(serde_json::json!({
                     "route":     "NotificationDetail",
                     "service":   "transfer_sent",
                     "status":    "success",
-                    "amount":    event.amount,
+                    "amount":    formatted_amount,
                     "reference": event.reference,
-                    "recipient": event.recipient_account,
+                    "recipient": recipient_display_name,
                 })),
             )
             .await;
         }
-    }
-
-    if let Ok(Some(Some(token))) = reciever_token {
-        // Construct the sender name or fallback to account number if name is missing
-        let sender_display_name = match &sender_info {
-            Ok(Some(row)) => format!(
-                "{} {}",
-                row.firstname.as_deref().unwrap_or(""),
-                row.lastname.as_deref().unwrap_or("")
-            )
-            .trim()
-            .to_string(),
-            _ => event.sender_account.clone(),
-        };
-
-        send_push_notification(
-            &token,
-            &format!("Credit Alert: ₦{}", event.amount),
-            &format!(
-                "You've received ₦{} from {}.",
-                event.amount, sender_display_name
-            ),
-            Some(serde_json::json!({
-                "route":     "NotificationDetail",
-                "service":   "transfer_received",
-                "status":    "success",
-                "amount":    event.amount,
-                "reference": event.reference,
-                "sender":    sender_display_name,
-            })),
-        )
-        .await;
     }
 
     println!(
@@ -1628,7 +1627,6 @@ pub async fn handle_internal_transfer(
         event.reference, event.sender_account, event.recipient_account, event.amount
     );
 }
-
 
 
 // ── Inbound transfer from external bank (webhook → kafka → here) ──────────────
@@ -1844,7 +1842,7 @@ pub async fn handle_transfer_inflow(
     );
 }
 
-// ── Shared insert helper ──────────────────────────────────────────────────────
+// ── Sharedp insert helper ──────────────────────────────────────────────────────
 
 async fn insert_transaction(
     db: &PgPool,
@@ -1911,6 +1909,9 @@ pub async fn handle_external_transfer(
         }
     };
 
+    // ── Format amount once for reuse across notifications ─────────────────────
+    let formatted_amount = format_amount(&event.amount);
+
     // ── Call 9PSB wallet_other_banks ──────────────────────────────────────────
     let psb_payload = serde_json::json!({
         "customer": {
@@ -1957,7 +1958,7 @@ pub async fn handle_external_transfer(
                     format!(
                         "Dear valued customer, your transfer of ₦{} to {} has been \
                          completed successfully. Reference: {}.",
-                        event.amount, event.recipient_name, event.reference
+                        formatted_amount, event.recipient_name, event.reference
                     ),
                 )
             } else {
@@ -1968,7 +1969,7 @@ pub async fn handle_external_transfer(
                         "Dear valued customer, we were unable to process your transfer \
                          of ₦{} to {}. Please try again or contact support if the issue \
                          persists. Reference: {}.",
-                        event.amount, event.recipient_name, event.reference
+                        formatted_amount, event.recipient_name, event.reference
                     ),
                 )
             };
@@ -2025,7 +2026,7 @@ pub async fn handle_external_transfer(
             "route":     "NotificationDetail",
             "service":   "external_transfer",
             "status":    if status == "SUCCESS" { "success" } else { "failed" },
-            "amount":    event.amount,
+            "amount":    formatted_amount,
             "reference": event.reference,
             "recipient": event.recipient_name,
             "narration": format!("{} · {}", event.recipient_name, event.recipient_number),
@@ -2047,6 +2048,7 @@ pub async fn handle_external_transfer(
         }
     }
 }
+
 
 pub async fn handle_airtime_purchase(
     payload: &str,
@@ -2255,15 +2257,6 @@ pub async fn handle_data_purchase(
         }
     };
 
-    println!(
-        "[worker/data_purchase] Processing — account: {}, phone: {}, network: {}, product: {}, amount: {}, ref: {}",
-        event.account_number,
-        event.phone_number,
-        event.network,
-        event.product_id,
-        event.amount,
-        event.reference
-    );
 
     let account_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
@@ -2284,6 +2277,9 @@ pub async fn handle_data_purchase(
         "debitAccount":         event.account_number,
         "transactionReference": event.reference,
     });
+
+    let formatted_amount = format_amount(&event.amount);
+
 
     match VasClient::new(cfg)
         .post(redis, "/vas/api/v1/topup/data", &vas_payload)
@@ -2338,13 +2334,14 @@ pub async fn handle_data_purchase(
             .flatten()
             .flatten();
 
+
             if let Some(token) = token {
                 let (title, body) = if vas_status == "SUCCESS" {
                     (
                         "Data Purchase Successful",
                         format!(
                             "Dear valued customer, your data purchase of ₦{} ({}) for {} has been completed successfully.",
-                            event.amount,
+                            formatted_amount,
                             res["data"]["dataPlan"]
                                 .as_str()
                                 .unwrap_or(&event.product_id),
@@ -2356,7 +2353,7 @@ pub async fn handle_data_purchase(
                         "Data Purchase Unsuccessful",
                         format!(
                             "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
-                            event.amount, event.phone_number, event.reference
+                            formatted_amount, event.phone_number, event.reference
                         ),
                     )
                 };
@@ -2369,7 +2366,7 @@ pub async fn handle_data_purchase(
                         "route":     "NotificationDetail",
                         "service":   "data_purchase",
                         "status":    tx_status,
-                        "amount":    event.amount,
+                        "amount":    formatted_amount,
                         "reference": event.reference,
                         "recipient": event.phone_number,
                         "network":   event.network,
@@ -2378,16 +2375,9 @@ pub async fn handle_data_purchase(
                 .await;
             }
 
-            println!(
-                "[worker/data_purchase] ── Complete — ref: {}, status: {} ──",
-                event.reference, tx_status
-            );
+            
         }
         Err(e) => {
-            println!(
-                "[worker/data_purchase] VAS error — ref: {}, error: {}",
-                event.reference, e
-            );
 
             // ── Save failed attempt ───────────────────────────────────────────
             let _ = sqlx::query!(
@@ -2428,13 +2418,13 @@ pub async fn handle_data_purchase(
         "Data Purchase Unsuccessful",
         &format!(
             "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
-            event.amount, event.phone_number, event.reference
+            formatted_amount, event.phone_number, event.reference
         ),
         Some(serde_json::json!({
             "route":     "NotificationDetail",
             "service":   "data_purchase",
             "status":    "failed",
-            "amount":    event.amount,
+            "amount":    formatted_amount,
             "reference": event.reference,
             "recipient": event.phone_number,
             "network":   event.network,
