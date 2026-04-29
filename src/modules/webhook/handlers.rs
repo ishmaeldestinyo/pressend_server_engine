@@ -1,4 +1,5 @@
-use actix_web::{HttpResponse, Responder, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use base64::Engine;
 use sqlx::PgPool;
 
 use crate::{
@@ -30,12 +31,40 @@ pub struct TransferWebhookPayload {
 }
 
 pub async fn _9psb_webhook(
+    req: HttpRequest,
     query: web::Query<WebhookQuery>,
     body: web::Json<serde_json::Value>,
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
     db: web::Data<PgPool>,
 ) -> impl Responder {
+
+    // ── Basic Auth Verification (required by 9PSB docs section 9a) ───────────
+    let username = std::env::var("_9PSB_WAAS_USERNAME").unwrap_or_default();
+    let password = std::env::var("_9PSB_WAAS_PASSWORD").unwrap_or_default();
+
+    let expected_token = base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{}", username, password));
+    let expected_header = format!("Basic {}", expected_token);
+
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if auth_header.is_empty() || auth_header != expected_header {
+        log::warn!(
+            "[webhook] Unauthorized request — invalid or missing Basic Auth. event={}",
+            query.event
+        );
+        return HttpResponse::Unauthorized().json(serde_json::json!({
+            "success": false,
+            "message": "Unauthorized"
+        }));
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     log::info!("[webhook] event={}", query.event);
     log::info!("[webhook] body={:#?}", body);
 
@@ -83,7 +112,7 @@ pub async fn _9psb_webhook(
         let event = KycUpgradeStatusEvent {
             account_id: payload.transaction_tracking_ref.clone(),
             status: payload.status.clone(),
-            tier: pending_tier, // ← now correctly 2 or 3
+            tier: pending_tier,
             account_number: payload.account_number.clone(),
             account_name: payload.account_name.clone(),
             message: payload.message.clone(),
@@ -123,9 +152,6 @@ pub async fn _9psb_webhook(
         );
 
         // ── Skip internal transfers — already handled by worker_handlers ──────
-        // PSB webhooks us for internal credits too but the DB insert and push
-        // notification were already done when the credit leg succeeded.
-        // Skipping here prevents duplicate DB rows and duplicate notifications.
         if narration.to_lowercase().contains("internal transfer") {
             log::info!(
                 "[webhook/transfer] Internal transfer — already handled by worker, skipping. session_id={}",

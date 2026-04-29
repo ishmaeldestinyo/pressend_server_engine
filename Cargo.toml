@@ -63,6 +63,7 @@ bcrypt = "0.19.0"
 env = "1.0.1"
 yup-oauth2 = "12.1.2"
 rust_decimal = "1"
+base64 = "0.21"
 
 # For testing
 [dev-dependencies]
