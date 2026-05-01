@@ -154,21 +154,19 @@ pub async fn _9psb_webhook(
             amount
         );
 
-        // ── Skip internal transfers — already handled by worker_handlers ──────
-        if narration.to_lowercase().contains("internal transfer") {
-            log::info!(
-                "[webhook/transfer] Internal transfer — already handled by worker, skipping. session_id={}",
-                session_id
-            );
-            return HttpResponse::Ok().json(ack);
-        }
-
         // ── Fire kafka — ON CONFLICT DO NOTHING in worker is the safety net ───
+            let status = payload.get("message") // Returns Option<&Value>
+        .and_then(|v| v.as_str())       // If it's a string, get the &str
+        .unwrap_or_default()            // Otherwise, empty string
+        .to_lowercase();
+
+    
         let event = InboundTransferEvent {
             session_id: session_id.clone(),
             transaction_ref,
             amount,
             account_number,
+            status,
             sender_name: payload.sendername.clone().unwrap_or_default(),
             sender_account: payload.sourceaccount.clone().unwrap_or_default(),
             sender_bank: payload.sourcebank.clone().unwrap_or_default(),

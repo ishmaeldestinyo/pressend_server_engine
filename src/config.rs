@@ -34,6 +34,9 @@ pub struct Config {
 
     pub vas_username: String,
     pub vas_password: String,
+
+    pub psb_webhook_username: String,
+    pub psb_webhook_password: String,
 }
 
 impl Config {
@@ -48,6 +51,10 @@ impl Config {
 
             vas_username: env::var("_9PSB_VAT_USERNAME").expect("_9PSB_VAT_USERNAME must be set"),
             vas_password: env::var("_9PSB_VAT_PASSWORD").expect("_9PSB_VAT_PASSWORD must be set"),
+           
+           
+            psb_webhook_username: env::var("_9PSB_WEBHOOK_USERNAME").expect("_9PSB_WEBHOOK_USERNAME must be set"),
+            psb_webhook_password: env::var("_9PSB_WEBHOOK_PASSWORD").expect("_9PSB_WEBHOOK_PASSWORD must be set"),
 
             db_host: env::var("POSTGRESQL_HOST").expect("POSTGRESQL_HOST must be set"),
             db_port: env::var("POSTGRESQL_PORT")

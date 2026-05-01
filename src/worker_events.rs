@@ -161,4 +161,5 @@ pub struct InboundTransferEvent {
     pub sender_account:    String,
     pub sender_bank:       String,
     pub narration:         String,
+    pub status:         Option<String>,
 }

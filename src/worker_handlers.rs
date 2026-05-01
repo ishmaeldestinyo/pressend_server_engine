@@ -1565,7 +1565,7 @@ pub async fn handle_internal_transfer(
     }
 
     // ── 4. Push notification — sender only ────────────────────────────────────
-    // Receiver credit alert is handled by handle_transfer_inflow via PSB webhook
+    // Receiver credit alert is handled by  via PSB webhook
     let sender_info = sqlx::query!(
         "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
         sender_uuid
@@ -1629,8 +1629,6 @@ pub async fn handle_internal_transfer(
 }
 
 
-// ── Inbound transfer from external bank (webhook → kafka → here) ──────────────
-
 pub async fn handle_transfer_inflow(
     payload: &str,
     db: &PgPool,
@@ -1645,14 +1643,72 @@ pub async fn handle_transfer_inflow(
         }
     };
 
-    println!(
-        "[worker/transfer_inflow] Processing — account: {}, amount: {}, session: {}",
-        event.account_number, event.amount, event.session_id
-    );
+    let formatted_amount = format_amount(&event.amount);
+    let amount_clean = event.amount.replace(",", "");
+    let amount_bd = bigdecimal::BigDecimal::from_str(&amount_clean).unwrap_or_default();
+    let amount_f64: f64 = amount_clean.parse().unwrap_or(0.0);
+    let is_above_10k = amount_f64 > 10_000.0;
 
-    // ── Fetch reciever by account number ──────────────────────────────────────
-    let reciever = match sqlx::query!(
-        "SELECT id, device_token FROM accounts WHERE account_number = $1 AND deleted_at IS NULL",
+    // ── Check if transactionref already exists in our system ─────────────────
+    let existing = sqlx::query!(
+        "SELECT id, status FROM transactions WHERE reference = $1",
+        event.transaction_ref
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
+
+    if let Some(tx) = existing {
+        // ── Known transaction — update status to whatever webhook says ────────
+        let new_status = if status_str == "failed" {
+                "failed".to_string()
+            } else {
+                "success".to_string()
+            };
+        let update = sqlx::query!(
+            r#"
+            UPDATE transactions
+            SET
+                status     = $1,
+                updated_at = NOW(),
+                meta       = meta || $2::jsonb
+            WHERE id = $3
+            "#,
+            new_status,
+            serde_json::json!({
+                "psb_transaction_ref": event.transaction_ref,
+                "nip_session_id":      event.session_id,
+                "sender_name":         event.sender_name,
+                "sender_account":      event.sender_account,
+                "sender_bank":         event.sender_bank,
+            }),
+            tx.id,
+        )
+        .execute(db)
+        .await;
+
+        match update {
+            Ok(_) => println!(
+                "[worker/transfer_inflow] Updated transaction — ref: {}, status: {}",
+                event.transaction_ref, new_status
+            ),
+            Err(e) => println!(
+                "[worker/transfer_inflow] DB update error — ref: {}, err: {}",
+                event.transaction_ref, e
+            ),
+        }
+
+        return;
+    }
+
+    // ── transactionref not found — external inbound transfer ──────────────────
+    // Fetch receiver by account number
+    let receiver = match sqlx::query!(
+        r#"
+        SELECT id, device_token, account_type, account_name
+        FROM accounts
+        WHERE account_number = $1 AND deleted_at IS NULL
+        "#,
         event.account_number
     )
     .fetch_optional(db)
@@ -1672,35 +1728,45 @@ pub async fn handle_transfer_inflow(
         }
     };
 
-    let amount_f64: f64 = event.amount.parse().unwrap_or(0.0);
-    let is_above_10k = amount_f64 > 10_000.0;
-    let amount_bd = bigdecimal::BigDecimal::from_str(&event.amount).unwrap_or_default();
+    let is_business = receiver.account_type.as_deref() == Some("business");
+    let should_charge_fee = is_business && is_above_10k;
 
-    // ── Insert inflow transaction record ──────────────────────────────────────
+    // ── Insert external inflow as credit transaction ───────────────────────────
     let result = sqlx::query!(
         r#"
-        INSERT INTO transactions
-            (sender_id, reciever_id, reference, type, amount, currency,
-             narration, status, channel,
-             reciever_account_number, reciever_account_name, reciever_bank,
-             meta)
-        VALUES
-            (NULL, $1, $2, 'credit', $3, 'NGN', $4, 'success', 'external',
-             $5, $5, $6,
-             $7)
+        INSERT INTO transactions (
+            sender_id,
+            reciever_id,
+            reference,
+            type,
+            amount,
+            currency,
+            narration,
+            status,
+            channel,
+            reciever_account_number,
+            reciever_account_name,
+            reciever_bank,
+            meta
+        )
+        VALUES (
+            NULL, $1, $2, 'credit', $3, 'NGN', $4, 'success', 'external',
+            $5, $6, '9PSB', $7
+        )
         ON CONFLICT (reference) DO NOTHING
         "#,
-        reciever.id,
-        event.session_id,
+        receiver.id,
+        event.transaction_ref,
         amount_bd,
         event.narration,
         event.account_number,
-        event.sender_bank,
+        receiver.account_name.clone().unwrap_or_default(),
         serde_json::json!({
             "sender_name":     event.sender_name,
             "sender_account":  event.sender_account,
             "sender_bank":     event.sender_bank,
             "transaction_ref": event.transaction_ref,
+            "nip_session_id":  event.session_id,
         }),
     )
     .execute(db)
@@ -1709,31 +1775,29 @@ pub async fn handle_transfer_inflow(
     match result {
         Ok(r) if r.rows_affected() == 0 => {
             println!(
-                "[worker/transfer_inflow] Already processed — session_id: {}",
-                event.session_id
+                "[worker/transfer_inflow] Duplicate — already inserted — ref: {}",
+                event.transaction_ref
             );
             return;
         }
-        Ok(_) => {
-            println!(
-                "[worker/transfer_inflow] Inflow recorded — session_id: {}",
-                event.session_id
-            );
-        }
+        Ok(_) => println!(
+            "[worker/transfer_inflow] External inflow recorded — ref: {}, account: {}, amount: ₦{}",
+            event.transaction_ref, event.account_number, formatted_amount
+        ),
         Err(e) => {
             println!("[worker/transfer_inflow] DB insert error: {}", e);
             return;
         }
     }
 
-    // ── Debit ₦35 fee if amount > ₦10,000 ────────────────────────────────────
-    if is_above_10k {
-        let fee_ref = format!("{}-FEE", event.session_id);
+    // ── Debit ₦35 fee if business account and amount > ₦10,000 ───────────────
+    if should_charge_fee {
+        let fee_ref = format!("{}-FEE", event.transaction_ref);
 
         let fee_payload = serde_json::json!({
             "accountNo":     event.account_number,
             "narration":     "Incoming transfer processing fee",
-            "totalAmount":   0,
+            "totalAmount":   "0",
             "transactionId": fee_ref,
             "merchant": {
                 "isFee":              true,
@@ -1750,85 +1814,105 @@ pub async fn handle_transfer_inflow(
                 let status = res["status"].as_str().unwrap_or("").to_uppercase();
                 if status == "SUCCESS" {
                     println!(
-                        "[worker/transfer_inflow] Fee deducted successfully — ref: {}",
+                        "[worker/transfer_inflow] Fee deducted — ref: {}",
                         fee_ref
                     );
 
-                    // ── Record fee as separate debit transaction ───────────────
                     let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
                     let _ = sqlx::query!(
                         r#"
-                        INSERT INTO transactions
-                            (sender_id, reciever_id, reference, type, amount, currency,
-                             narration, status, channel, meta)
-                        VALUES
-                            ($1, NULL, $2, 'debit', $3, 'NGN',
-                             'Incoming transfer processing fee', 'success', 'internal',
-                             $4)
+                        INSERT INTO transactions (
+                            sender_id, reciever_id, reference, type, amount, currency,
+                            narration, status, channel, meta
+                        )
+                        VALUES ($1, NULL, $2, 'debit', $3, 'NGN',
+                                'Incoming transfer processing fee', 'success', 'internal', $4)
                         ON CONFLICT (reference) DO NOTHING
                         "#,
-                        reciever.id,
+                        receiver.id,
                         fee_ref,
                         fee_bd,
                         serde_json::json!({
                             "fee_type":   "incoming_transfer_fee",
-                            "linked_ref": event.session_id,
+                            "linked_ref": event.transaction_ref,
                             "fee_amount": "35.00",
                         }),
                     )
                     .execute(db)
                     .await
                     .map_err(|e| println!("[worker/transfer_inflow] Fee DB insert error: {}", e));
+
+                    // ── Notify business owner about fee ────────────────────────
+                    if let Some(token) = &receiver.device_token {
+                        send_push_notification(
+                            token,
+                            "Processing Fee Deducted",
+                            &format!(
+                                "A processing fee of ₦35.00 has been deducted from your \
+                                 account for an incoming transfer of ₦{} from {} ({}).",
+                                formatted_amount, event.sender_name, event.sender_bank
+                            ),
+                            Some(serde_json::json!({
+                                "route":     "NotificationDetail",
+                                "service":   "transfer_fee",
+                                "status":    "success",
+                                "amount":    "35.00",
+                                "reference": fee_ref,
+                                "narration": format!(
+                                    "Processing fee for ₦{} inflow from {} · {}",
+                                    formatted_amount, event.sender_name, event.sender_bank
+                                ),
+                            })),
+                        )
+                        .await;
+                    }
                 } else {
                     println!(
-                        "[worker/transfer_inflow] Fee deduction rejected by PSB — status: '{}', ref: {}",
+                        "[worker/transfer_inflow] Fee rejected by PSB — status: '{}', ref: {}",
                         status, fee_ref
                     );
                 }
             }
-            Err(e) => {
-                println!(
-                    "[worker/transfer_inflow] Fee debit PSB error — ref: {}, error: {}",
-                    fee_ref, e
-                );
-            }
+            Err(e) => println!(
+                "[worker/transfer_inflow] Fee PSB error — ref: {}, err: {}",
+                fee_ref, e
+            ),
         }
     }
 
-    // ── Push notification ─────────────────────────────────────────────────────
-    if let Some(token) = reciever.device_token {
-        let (title, body) = if is_above_10k {
+    // ── Credit alert push notification ────────────────────────────────────────
+    if let Some(token) = &receiver.device_token {
+        let (title, body) = if should_charge_fee {
             (
-                "💰 Credit Alert",
+                "Credit Alert",
                 format!(
-                    "Dear valued customer, your wallet has been credited with ₦{}. \
-                     Please note that a processing fee of ₦35.00 has been applied \
-                     to this transaction as it exceeds ₦10,000. \
+                    "Your wallet has been credited with ₦{}. \
+                     A processing fee of ₦35.00 was applied as this transfer exceeds ₦10,000. \
                      Sent by: {} ({}).",
-                    event.amount, event.sender_name, event.sender_bank
+                    formatted_amount, event.sender_name, event.sender_bank
                 ),
             )
         } else {
             (
-                "💰 Credit Alert",
+                "Credit Alert",
                 format!(
-                    "Dear valued customer, your wallet has been credited with ₦{}. \
+                    "Your wallet has been credited with ₦{}. \
                      Sent by: {} ({}).",
-                    event.amount, event.sender_name, event.sender_bank
+                    formatted_amount, event.sender_name, event.sender_bank
                 ),
             )
         };
 
         send_push_notification(
-            &token,
+            token,
             title,
             &body,
             Some(serde_json::json!({
                 "route":     "NotificationDetail",
                 "service":   "transfer_received",
                 "status":    "success",
-                "amount":    event.amount,
-                "reference": event.session_id,
+                "amount":    formatted_amount,
+                "reference": event.transaction_ref,
                 "sender":    event.sender_name,
                 "narration": format!("From {} · {}", event.sender_name, event.sender_bank),
             })),
@@ -1837,10 +1921,12 @@ pub async fn handle_transfer_inflow(
     }
 
     println!(
-        "[worker/transfer_inflow] ── Complete — session_id: {}, account: {}, amount: {}, fee_charged: {} ──",
-        event.session_id, event.account_number, event.amount, is_above_10k
+        "[worker/transfer_inflow] ── Complete — ref: {}, account: {}, amount: ₦{}, fee_charged: {} ──",
+        event.transaction_ref, event.account_number, formatted_amount, should_charge_fee
     );
 }
+
+
 
 // ── Sharedp insert helper ──────────────────────────────────────────────────────
 
