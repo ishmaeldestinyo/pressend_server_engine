@@ -58,7 +58,7 @@ pub async fn _9psb_webhook(
 
     if auth_header.is_empty() || auth_header != expected_header {
         log::warn!(
-            "[webhook] Unauthorized request — invalid or missing Basic Auth. event={}",
+            "[webhook] ishmael updated Unauthorized request — invalid or missing Basic Auth. event={}",
             query.event
         );
         return HttpResponse::Unauthorized().json(serde_json::json!({
