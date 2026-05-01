@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, device_token FROM accounts WHERE account_number = $1 AND deleted_at IS NULL",
+  "query": "SELECT id, status FROM transactions WHERE reference = $1",
   "describe": {
     "columns": [
       {
@@ -10,8 +10,8 @@
       },
       {
         "ordinal": 1,
-        "name": "device_token",
-        "type_info": "Varchar"
+        "name": "status",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -21,8 +21,8 @@
     },
     "nullable": [
       false,
-      true
+      false
     ]
   },
-  "hash": "a442777e7b708c7004bdf5b98fdf42e8ff4707c187ddedeb895d80292001e4a9"
+  "hash": "5b2ac5657f617eeb19034690773102e46fa8e03e1ae7e0abc000143b0c714a55"
 }

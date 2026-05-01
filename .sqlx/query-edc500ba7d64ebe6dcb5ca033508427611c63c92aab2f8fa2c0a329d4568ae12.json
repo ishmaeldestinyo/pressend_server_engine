@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE transactions\n            SET\n                status     = $1,\n                updated_at = NOW(),\n                meta       = meta || $2::jsonb\n            WHERE id = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "edc500ba7d64ebe6dcb5ca033508427611c63c92aab2f8fa2c0a329d4568ae12"
+}
