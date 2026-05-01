@@ -1660,10 +1660,10 @@ pub async fn handle_transfer_inflow(
 
     if let Some(tx) = existing {
         // ── Known transaction — update status to whatever webhook says ────────
-        let new_status = if status_str == "failed" {
-                "failed".to_string()
+        let new_status = if event.status.to_lowercase() == "failed" {
+                "failed"
             } else {
-                "success".to_string()
+                "success"
             };
         let update = sqlx::query!(
             r#"

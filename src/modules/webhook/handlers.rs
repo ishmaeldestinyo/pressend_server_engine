@@ -155,11 +155,7 @@ pub async fn _9psb_webhook(
         );
 
         // ── Fire kafka — ON CONFLICT DO NOTHING in worker is the safety net ───
-            let status = payload.get("message") // Returns Option<&Value>
-        .and_then(|v| v.as_str())       // If it's a string, get the &str
-        .unwrap_or_default()            // Otherwise, empty string
-        .to_lowercase();
-
+           let status = payload.message.clone().unwrap_or_default().to_lowercase();
     
         let event = InboundTransferEvent {
             session_id: session_id.clone(),
