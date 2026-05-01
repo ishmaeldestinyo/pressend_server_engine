@@ -40,15 +40,17 @@ pub async fn _9psb_webhook(
     cfg: web::Data<Config>,
 ) -> impl Responder {
 
+    // Temporary — log everything before auth so we can see what 9PSB sends
+    log::warn!("[webhook] incoming event: {}", query.event);
+    log::warn!("[webhook] incoming Authorization header: {:?}", req.headers().get("Authorization").and_then(|v| v.to_str().ok()));
+    log::warn!("[webhook] incoming body: {:#?}", body);
+
     // ── Basic Auth Verification (required by 9PSB docs section 9a) ───────────
     let auth_header = req
         .headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-
-    // Temporary — logs exactly what 9PSB sends so you can confirm the creds
-    log::warn!("[webhook] incoming Authorization header: {:?}", auth_header);
 
     let expected_token = base64::engine::general_purpose::STANDARD
         .encode(format!("{}:{}", cfg.psb_waas_username, cfg.psb_waas_password));
