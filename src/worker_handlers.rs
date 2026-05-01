@@ -1752,12 +1752,13 @@ pub async fn handle_transfer_inflow(
             meta
         )
         VALUES (
-            NULL, $1, $2, 'credit', $3, 'NGN', $4, 'success', 'external',
-            $5, $6, '9PSB', $7
+            $1, $2, $3, 'credit', $4, 'NGN', $5, 'success', 'external',
+            $6, $7, '9PSB', $8
         )
         ON CONFLICT (reference) DO NOTHING
         "#,
-        receiver.id,
+      None as Option<uuid::Uuid>,          // $1: sender_id (Now Nullable)
+    Some(receiver.id) as Option<uuid::Uuid>, // $2: reciever_id (Explicitly optional)
         event.transaction_ref,
         amount_bd,
         event.narration,
@@ -1821,17 +1822,25 @@ pub async fn handle_transfer_inflow(
                     );
 
                     let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
-                    let _ = sqlx::query!(
+                   let _ = sqlx::query!(
                         r#"
                         INSERT INTO transactions (
-                            sender_id, reciever_id, reference, type, amount, currency,
-                            narration, status, channel, meta
+                            sender_id, 
+                            reciever_id, 
+                            reference, 
+                            type, 
+                            amount, 
+                            currency,
+                            narration, 
+                            status, 
+                            channel, 
+                            meta
                         )
                         VALUES ($1, NULL, $2, 'debit', $3, 'NGN',
                                 'Incoming transfer processing fee', 'success', 'internal', $4)
                         ON CONFLICT (reference) DO NOTHING
                         "#,
-                        receiver.id,
+                        Some(receiver.id) as Option<uuid::Uuid>, 
                         fee_ref,
                         fee_bd,
                         serde_json::json!({
@@ -1843,6 +1852,7 @@ pub async fn handle_transfer_inflow(
                     .execute(db)
                     .await
                     .map_err(|e| println!("[worker/transfer_inflow] Fee DB insert error: {}", e));
+
 
                     // ── Notify business owner about fee ────────────────────────
                     if let Some(token) = &receiver.device_token {
