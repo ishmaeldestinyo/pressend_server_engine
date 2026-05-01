@@ -53,7 +53,7 @@ pub async fn _9psb_webhook(
         .unwrap_or("");
 
     let expected_token = base64::engine::general_purpose::STANDARD
-        .encode(format!("{}:{}", cfg.psb_waas_username, cfg.psb_waas_password));
+        .encode(format!("{}:{}", cfg.psb_webhook_username, cfg.psb_webhook_password));
     let expected_header = format!("Basic {}", expected_token);
 
     if auth_header.is_empty() || auth_header != expected_header {
