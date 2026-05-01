@@ -162,7 +162,7 @@ pub async fn _9psb_webhook(
             transaction_ref,
             amount,
             account_number,
-            status,
+            status: Some(status),
             sender_name: payload.sendername.clone().unwrap_or_default(),
             sender_account: payload.sourceaccount.clone().unwrap_or_default(),
             sender_bank: payload.sourcebank.clone().unwrap_or_default(),

@@ -1660,7 +1660,9 @@ pub async fn handle_transfer_inflow(
 
     if let Some(tx) = existing {
         // ── Known transaction — update status to whatever webhook says ────────
-        let new_status = if event.status.to_lowercase() == "failed" {
+        let status_str = event.status.as_deref().unwrap_or("").to_lowercase();
+
+        let new_status = if status_str == "failed" {
                 "failed"
             } else {
                 "success"
@@ -1728,7 +1730,7 @@ pub async fn handle_transfer_inflow(
         }
     };
 
-    let is_business = receiver.account_type.as_deref() == Some("business");
+    let is_business = receiver.account_type == "business";
     let should_charge_fee = is_business && is_above_10k;
 
     // ── Insert external inflow as credit transaction ───────────────────────────
