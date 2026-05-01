@@ -84,14 +84,6 @@ pub async fn _9psb_webhook(
         "message": "Acknowledged"
     });
 
-    let ack = serde_json::json!({
-        "success": true,
-        "code":    "00",
-        "status":  "SUCCESS",
-        "message": "Acknowledged"
-    });
-
-    // ── Account upgrade ───────────────────────────────────────────────────────
     if query.event == "account-upgrade" {
         let payload: AccountUpgradeWebhookPayload = match serde_json::from_value(body.0.clone()) {
             Ok(p) => p,
