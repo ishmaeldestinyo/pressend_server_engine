@@ -76,9 +76,7 @@ pub async fn list_mytransaction(
     }
 
     // ── Build dynamic query ───────────────────────────────────────────────────
-    // Include:
-    //   1. All transactions sent by this account (sender_id = auth.id)
-    //   2. Palm payments received by this account (reciever_id = auth.id AND channel = 'palm')
+    // Fetch any row where the user is sender OR receiver — no channel filtering
     let mut builder = sqlx::QueryBuilder::new(
         r#"SELECT
                 id, sender_id, reciever_id,
@@ -88,13 +86,11 @@ pub async fn list_mytransaction(
                 balance_before, balance_after,
                 meta, created_at, updated_at
            FROM transactions
-           WHERE (
-               sender_id = "#,
+           WHERE (sender_id = "#,
     );
     builder.push_bind(account_uuid);
-    builder.push(" OR (reciever_id = ");
+    builder.push(" OR reciever_id = ");
     builder.push_bind(account_uuid);
-    builder.push(" AND channel = 'palm')");
     builder.push(")");
 
     if let Some(ref status) = query.status {
@@ -141,33 +137,22 @@ pub async fn list_mytransaction(
         Ok(rows) => rows
             .iter()
             .map(|t| {
-                let sender_id   = t.get::<uuid::Uuid, _>("sender_id");
-                let reciever_id = t.get::<Option<uuid::Uuid>, _>("reciever_id");
-                let channel     = t.get::<Option<String>, _>("channel");
-
-                // ── Derive direction from perspective of auth user ─────────────
-                // If the auth user is the receiver → credit (money came in)
-                // If the auth user is the sender   → debit  (money went out)
-                let direction = if reciever_id == Some(account_uuid) {
-                    "credit"
-                } else {
-                    "debit"
-                };
+                let tx_type = t.get::<String, _>("type"); // 'debit' or 'credit' — stored at insert time
 
                 serde_json::json!({
                     "id":                      t.get::<uuid::Uuid, _>("id"),
-                    "sender_id":               sender_id,
-                    "reciever_id":             reciever_id,
+                    "sender_id":               t.get::<Option<uuid::Uuid>, _>("sender_id"),
+                    "reciever_id":             t.get::<Option<uuid::Uuid>, _>("reciever_id"),
                     "reciever_account_number": t.get::<Option<String>, _>("reciever_account_number"),
                     "reciever_account_name":   t.get::<Option<String>, _>("reciever_account_name"),
                     "reciever_bank":           t.get::<Option<String>, _>("reciever_bank"),
                     "reference":               t.get::<String, _>("reference"),
-                    "type":                    direction,
+                    "type":                    tx_type, // trust the DB value directly
                     "amount":                  t.get::<bigdecimal::BigDecimal, _>("amount").to_string(),
                     "currency":                t.get::<String, _>("currency"),
                     "narration":               t.get::<Option<String>, _>("narration"),
                     "status":                  t.get::<String, _>("status"),
-                    "channel":                 channel,
+                    "channel":                 t.get::<Option<String>, _>("channel"),
                     "balance_before":          t.get::<Option<bigdecimal::BigDecimal>, _>("balance_before").map(|v| v.to_string()),
                     "balance_after":           t.get::<Option<bigdecimal::BigDecimal>, _>("balance_after").map(|v| v.to_string()),
                     "meta":                    t.get::<Option<serde_json::Value>, _>("meta"),
