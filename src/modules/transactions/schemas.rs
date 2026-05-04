@@ -13,6 +13,14 @@ pub struct ResolveBankDetailRequest {
     pub bank_code: String,
 }
 
+#[derive(Deserialize)]
+pub struct PsbWalletTxQuery {
+    pub from_date:        Option<String>,
+    pub to_date:          Option<String>,
+    pub number_of_items:  Option<u32>,
+}
+
+
 // ── Response shapes (shared) ──────────────────────────────────────────────────
 #[derive(Debug, Serialize)]
 pub struct BankResolveResponse {

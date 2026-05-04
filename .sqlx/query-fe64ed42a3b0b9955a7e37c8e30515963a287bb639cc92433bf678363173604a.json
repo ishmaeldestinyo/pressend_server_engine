@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        INSERT INTO transactions (\n                            sender_id,\n                            reciever_id,\n                            reference,\n                            type,\n                            amount,\n                            currency,\n                            narration,\n                            status,\n                            channel,\n                            meta\n                        )\n                        VALUES ($1, NULL, $2, 'debit', $3, 'NGN',\n                                'Incoming transfer processing fee', 'success', 'internal', $4)\n                        ON CONFLICT (reference) DO NOTHING\n                        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Numeric",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fe64ed42a3b0b9955a7e37c8e30515963a287bb639cc92433bf678363173604a"
+}

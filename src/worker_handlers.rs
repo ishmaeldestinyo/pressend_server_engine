@@ -1344,39 +1344,6 @@ pub async fn handle_set_payment_pin(payload: &str, mailer: &Mailer) {
     }
 }
 
-/// Formats a numeric string into a comma-separated currency format.
-/// e.g. "100000" -> "100,000" | "1000000.50" -> "1,000,000.50"
-fn format_amount(amount: &str) -> String {
-    let amount = amount.trim();
-
-    let (integer_part, decimal_part) = if let Some(dot_pos) = amount.find('.') {
-        (&amount[..dot_pos], Some(&amount[dot_pos + 1..]))
-    } else {
-        (amount, None)
-    };
-
-    let formatted_integer = integer_part
-        .chars()
-        .rev()
-        .enumerate()
-        .flat_map(|(i, c)| {
-            if i > 0 && i % 3 == 0 {
-                vec![',', c]
-            } else {
-                vec![c]
-            }
-        })
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-
-    match decimal_part {
-        Some(dec) => format!("{}.{}", formatted_integer, dec),
-        None => formatted_integer,
-    }
-}
-
 pub async fn handle_internal_transfer(
     payload: &str,
     db: &PgPool,
@@ -1406,7 +1373,6 @@ pub async fn handle_internal_transfer(
     };
 
     // ── Format amount once for reuse across notifications ─────────────────────
-    let formatted_amount = format_amount(&event.amount);
 
     // ── 1. PSB debit sender ───────────────────────────────────────────────────
     let debit_payload = serde_json::json!({
@@ -1416,7 +1382,7 @@ pub async fn handle_internal_transfer(
         "transactionId": event.reference,
         "merchant": {
             "isFee":              false,
-            "merchantFeeAccount": "",
+            "d": "",
             "merchantFeeAmount":  ""
         }
     });
@@ -1510,13 +1476,13 @@ pub async fn handle_internal_transfer(
                         "Pressend Transfer Issue",
                         &format!(
                             "Your transfer of ₦{} could not be completed. You will be refunded.",
-                            formatted_amount
+                            &event.amount
                         ),
                         Some(serde_json::json!({
                             "route":     "NotificationDetail",
                             "service":   "transfer_sent",
                             "status":    "failed",
-                            "amount":    formatted_amount,
+                            "amount":    &event.amount,
                             "reference": event.reference,
                             "narration": "Transfer could not be completed. Refund in progress.",
                         })),
@@ -1607,13 +1573,13 @@ pub async fn handle_internal_transfer(
                 "Transfer Successful",
                 &format!(
                     "₦{} sent successfully to {}",
-                    formatted_amount, recipient_display_name
+                    &event.amount, recipient_display_name
                 ),
                 Some(serde_json::json!({
                     "route":     "NotificationDetail",
                     "service":   "transfer_sent",
                     "status":    "success",
-                    "amount":    formatted_amount,
+                    "amount":    &event.amount,
                     "reference": event.reference,
                     "recipient": recipient_display_name,
                 })),
@@ -1643,7 +1609,6 @@ pub async fn handle_transfer_inflow(
         }
     };
 
-    let formatted_amount = format_amount(&event.amount);
     let amount_clean = event.amount.replace(",", "");
     let amount_bd = bigdecimal::BigDecimal::from_str(&amount_clean).unwrap_or_default();
     let amount_f64: f64 = amount_clean.parse().unwrap_or(0.0);
@@ -1659,14 +1624,19 @@ pub async fn handle_transfer_inflow(
     .unwrap_or(None);
 
     if let Some(tx) = existing {
-        // ── Known transaction — update status to whatever webhook says ────────
         let status_str = event.status.as_deref().unwrap_or("").to_lowercase();
+        let new_status = if status_str == "failed" { "failed" } else { "success" };
 
-        let new_status = if status_str == "failed" {
-                "failed"
-            } else {
-                "success"
-            };
+        // ── Idempotency check — if status hasn't changed, webhook fired twice ─
+        if tx.status == new_status {
+            println!(
+                "[worker/transfer_inflow] Duplicate webhook — status unchanged, skipping — ref: {}",
+                event.transaction_ref
+            );
+            return;
+        }
+
+        // ── Status actually changed — update only, no notification ────────────
         let update = sqlx::query!(
             r#"
             UPDATE transactions
@@ -1704,7 +1674,6 @@ pub async fn handle_transfer_inflow(
     }
 
     // ── transactionref not found — external inbound transfer ──────────────────
-    // Fetch receiver by account number
     let receiver = match sqlx::query!(
         r#"
         SELECT id, device_token, account_type, account_name
@@ -1757,8 +1726,8 @@ pub async fn handle_transfer_inflow(
         )
         ON CONFLICT (reference) DO NOTHING
         "#,
-      None as Option<uuid::Uuid>,          // $1: sender_id (Now Nullable)
-    Some(receiver.id) as Option<uuid::Uuid>, // $2: reciever_id (Explicitly optional)
+        None as Option<uuid::Uuid>,
+        Some(receiver.id) as Option<uuid::Uuid>,
         event.transaction_ref,
         amount_bd,
         event.narration,
@@ -1777,6 +1746,7 @@ pub async fn handle_transfer_inflow(
 
     match result {
         Ok(r) if r.rows_affected() == 0 => {
+            // Another worker beat us to it — do not notify
             println!(
                 "[worker/transfer_inflow] Duplicate — already inserted — ref: {}",
                 event.transaction_ref
@@ -1785,7 +1755,7 @@ pub async fn handle_transfer_inflow(
         }
         Ok(_) => println!(
             "[worker/transfer_inflow] External inflow recorded — ref: {}, account: {}, amount: ₦{}",
-            event.transaction_ref, event.account_number, formatted_amount
+            event.transaction_ref, event.account_number, &event.amount
         ),
         Err(e) => {
             println!("[worker/transfer_inflow] DB insert error: {}", e);
@@ -1800,12 +1770,12 @@ pub async fn handle_transfer_inflow(
         let fee_payload = serde_json::json!({
             "accountNo":     event.account_number,
             "narration":     "Incoming transfer processing fee",
-            "totalAmount":   "0",
+            "totalAmount":   "1",
             "transactionId": fee_ref,
             "merchant": {
-                "isFee":              true,
-                "merchantFeeAccount": cfg._9psb_operational_account,
-                "merchantFeeAmount":  "35"
+                "isFee":              false,
+                "merchantFeeAccount": &cfg._9psb_operational_account,
+                "merchantFeeAmount":  "34"
             }
         });
 
@@ -1822,25 +1792,25 @@ pub async fn handle_transfer_inflow(
                     );
 
                     let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
-                   let _ = sqlx::query!(
+                    let _: Result<_, _> = sqlx::query!(
                         r#"
                         INSERT INTO transactions (
-                            sender_id, 
-                            reciever_id, 
-                            reference, 
-                            type, 
-                            amount, 
+                            sender_id,
+                            reciever_id,
+                            reference,
+                            type,
+                            amount,
                             currency,
-                            narration, 
-                            status, 
-                            channel, 
+                            narration,
+                            status,
+                            channel,
                             meta
                         )
                         VALUES ($1, NULL, $2, 'debit', $3, 'NGN',
                                 'Incoming transfer processing fee', 'success', 'internal', $4)
                         ON CONFLICT (reference) DO NOTHING
                         "#,
-                        Some(receiver.id) as Option<uuid::Uuid>, 
+                        Some(receiver.id) as Option<uuid::Uuid>,
                         fee_ref,
                         fee_bd,
                         serde_json::json!({
@@ -1853,7 +1823,6 @@ pub async fn handle_transfer_inflow(
                     .await
                     .map_err(|e| println!("[worker/transfer_inflow] Fee DB insert error: {}", e));
 
-
                     // ── Notify business owner about fee ────────────────────────
                     if let Some(token) = &receiver.device_token {
                         send_push_notification(
@@ -1862,7 +1831,7 @@ pub async fn handle_transfer_inflow(
                             &format!(
                                 "A processing fee of ₦35.00 has been deducted from your \
                                  account for an incoming transfer of ₦{} from {} ({}).",
-                                formatted_amount, event.sender_name, event.sender_bank
+                                &event.amount, event.sender_name, event.sender_bank
                             ),
                             Some(serde_json::json!({
                                 "route":     "NotificationDetail",
@@ -1872,7 +1841,7 @@ pub async fn handle_transfer_inflow(
                                 "reference": fee_ref,
                                 "narration": format!(
                                     "Processing fee for ₦{} inflow from {} · {}",
-                                    formatted_amount, event.sender_name, event.sender_bank
+                                    &event.amount, event.sender_name, event.sender_bank
                                 ),
                             })),
                         )
@@ -1892,7 +1861,7 @@ pub async fn handle_transfer_inflow(
         }
     }
 
-    // ── Credit alert push notification ────────────────────────────────────────
+    // ── Credit alert push notification (fires exactly once — on first insert) ──
     if let Some(token) = &receiver.device_token {
         let (title, body) = if should_charge_fee {
             (
@@ -1901,7 +1870,7 @@ pub async fn handle_transfer_inflow(
                     "Your wallet has been credited with ₦{}. \
                      A processing fee of ₦35.00 was applied as this transfer exceeds ₦10,000. \
                      Sent by: {} ({}).",
-                    formatted_amount, event.sender_name, event.sender_bank
+                    &event.amount, event.sender_name, event.sender_bank
                 ),
             )
         } else {
@@ -1910,7 +1879,7 @@ pub async fn handle_transfer_inflow(
                 format!(
                     "Your wallet has been credited with ₦{}. \
                      Sent by: {} ({}).",
-                    formatted_amount, event.sender_name, event.sender_bank
+                    &event.amount, event.sender_name, event.sender_bank
                 ),
             )
         };
@@ -1923,7 +1892,7 @@ pub async fn handle_transfer_inflow(
                 "route":     "NotificationDetail",
                 "service":   "transfer_received",
                 "status":    "success",
-                "amount":    formatted_amount,
+                "amount":    &event.amount,
                 "reference": event.transaction_ref,
                 "sender":    event.sender_name,
                 "narration": format!("From {} · {}", event.sender_name, event.sender_bank),
@@ -1934,7 +1903,7 @@ pub async fn handle_transfer_inflow(
 
     println!(
         "[worker/transfer_inflow] ── Complete — ref: {}, account: {}, amount: ₦{}, fee_charged: {} ──",
-        event.transaction_ref, event.account_number, formatted_amount, should_charge_fee
+        event.transaction_ref, event.account_number, &event.amount, should_charge_fee
     );
 }
 
@@ -1990,15 +1959,6 @@ pub async fn handle_external_transfer(
         }
     };
 
-    println!(
-        "[worker/external_transfer] Processing — sender: {}, recipient: {}, bank: {}, amount: {}, ref: {}",
-        event.sender_account_number,
-        event.recipient_number,
-        event.bank_code,
-        event.amount,
-        event.reference
-    );
-
     let sender_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
         Err(e) => {
@@ -2008,8 +1968,6 @@ pub async fn handle_external_transfer(
     };
 
     // ── Format amount once for reuse across notifications ─────────────────────
-    let formatted_amount = format_amount(&event.amount);
-
     // ── Call 9PSB wallet_other_banks ──────────────────────────────────────────
     let psb_payload = serde_json::json!({
         "customer": {
@@ -2056,7 +2014,7 @@ pub async fn handle_external_transfer(
                     format!(
                         "Dear valued customer, your transfer of ₦{} to {} has been \
                          completed successfully. Reference: {}.",
-                        formatted_amount, event.recipient_name, event.reference
+                        &event.amount, event.recipient_name, event.reference
                     ),
                 )
             } else {
@@ -2067,7 +2025,7 @@ pub async fn handle_external_transfer(
                         "Dear valued customer, we were unable to process your transfer \
                          of ₦{} to {}. Please try again or contact support if the issue \
                          persists. Reference: {}.",
-                        formatted_amount, event.recipient_name, event.reference
+                        &event.amount, event.recipient_name, event.reference
                     ),
                 )
             };
@@ -2124,7 +2082,7 @@ pub async fn handle_external_transfer(
             "route":     "NotificationDetail",
             "service":   "external_transfer",
             "status":    if status == "SUCCESS" { "success" } else { "failed" },
-            "amount":    formatted_amount,
+            "amount":    &event.amount,
             "reference": event.reference,
             "recipient": event.recipient_name,
             "narration": format!("{} · {}", event.recipient_name, event.recipient_number),
@@ -2376,8 +2334,6 @@ pub async fn handle_data_purchase(
         "transactionReference": event.reference,
     });
 
-    let formatted_amount = format_amount(&event.amount);
-
 
     match VasClient::new(cfg)
         .post(redis, "/vas/api/v1/topup/data", &vas_payload)
@@ -2439,7 +2395,7 @@ pub async fn handle_data_purchase(
                         "Data Purchase Successful",
                         format!(
                             "Dear valued customer, your data purchase of ₦{} ({}) for {} has been completed successfully.",
-                            formatted_amount,
+                            &event.amount,
                             res["data"]["dataPlan"]
                                 .as_str()
                                 .unwrap_or(&event.product_id),
@@ -2451,7 +2407,7 @@ pub async fn handle_data_purchase(
                         "Data Purchase Unsuccessful",
                         format!(
                             "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
-                            formatted_amount, event.phone_number, event.reference
+                            &event.amount, event.phone_number, event.reference
                         ),
                     )
                 };
@@ -2464,7 +2420,7 @@ pub async fn handle_data_purchase(
                         "route":     "NotificationDetail",
                         "service":   "data_purchase",
                         "status":    tx_status,
-                        "amount":    formatted_amount,
+                        "amount":    &event.amount,
                         "reference": event.reference,
                         "recipient": event.phone_number,
                         "network":   event.network,
@@ -2516,13 +2472,13 @@ pub async fn handle_data_purchase(
         "Data Purchase Unsuccessful",
         &format!(
             "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
-            formatted_amount, event.phone_number, event.reference
+            &event.amount, event.phone_number, event.reference
         ),
         Some(serde_json::json!({
             "route":     "NotificationDetail",
             "service":   "data_purchase",
             "status":    "failed",
-            "amount":    formatted_amount,
+            "amount":    &event.amount,
             "reference": event.reference,
             "recipient": event.phone_number,
             "network":   event.network,
