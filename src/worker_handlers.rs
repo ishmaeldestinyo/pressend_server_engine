@@ -1767,97 +1767,122 @@ pub async fn handle_transfer_inflow(
     if should_charge_fee {
         let fee_ref = format!("{}-FEE", event.transaction_ref);
 
-        let fee_payload = serde_json::json!({
-            "accountNo":     event.account_number,
-            "narration":     "Incoming transfer processing fee",
-            "totalAmount":   "1",
-            "transactionId": fee_ref,
-            "merchant": {
-                "isFee":              false,
-                "merchantFeeAccount": &cfg._9psb_operational_account,
-                "merchantFeeAmount":  "34"
-            }
-        });
+        // ── Guard: skip entirely if fee was already processed (prevents double
+        //    notification when the webhook is delivered more than once) ─────────
+        let fee_exists = sqlx::query!(
+            "SELECT id FROM transactions WHERE reference = $1",
+            fee_ref
+        )
+        .fetch_optional(db)
+        .await
+        .unwrap_or(None);
 
-        match PsbClient::new(cfg)
-            .post(redis, "/waas/api/v1/debit/transfer", &fee_payload)
-            .await
-        {
-            Ok(res) => {
-                let status = res["status"].as_str().unwrap_or("").to_uppercase();
-                if status == "SUCCESS" {
-                    println!(
-                        "[worker/transfer_inflow] Fee deducted — ref: {}",
-                        fee_ref
-                    );
+        if fee_exists.is_some() {
+            println!(
+                "[worker/transfer_inflow] Fee already processed — skipping — ref: {}",
+                fee_ref
+            );
+        } else {
+            let receiver_name = receiver.account_name.clone().unwrap_or_default();
 
-                    let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
-                    let _: Result<_, _> = sqlx::query!(
-                        r#"
-                        INSERT INTO transactions (
-                            sender_id,
-                            reciever_id,
-                            reference,
-                            type,
-                            amount,
-                            currency,
-                            narration,
-                            status,
-                            channel,
-                            meta
+            let fee_payload = serde_json::json!({
+                "accountNo":     event.account_number,
+                "narration":     "Incoming transfer processing fee",
+                "totalAmount":   "1",
+                "transactionId": fee_ref,
+                "merchant": {
+                    "isFee":              false,
+                    "merchantFeeAccount": &cfg._9psb_operational_account,
+                    "merchantFeeAmount":  "34"
+                }
+            });
+
+            match PsbClient::new(cfg)
+                .post(redis, "/waas/api/v1/debit/transfer", &fee_payload)
+                .await
+            {
+                Ok(res) => {
+                    let status = res["status"].as_str().unwrap_or("").to_uppercase();
+                    if status == "SUCCESS" {
+                        println!(
+                            "[worker/transfer_inflow] Fee deducted — ref: {}",
+                            fee_ref
+                        );
+
+                        let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
+                        let fee_narration = format!(
+                            "Processed fee for ₦35 of {} credit alert greater than 10,000",
+                            receiver_name
+                        );
+
+                        let _: Result<_, _> = sqlx::query!(
+                            r#"
+                            INSERT INTO transactions (
+                                sender_id,
+                                reciever_id,
+                                reference,
+                                type,
+                                amount,
+                                currency,
+                                narration,
+                                status,
+                                channel,
+                                meta
+                            )
+                            VALUES ($1, NULL, $2, 'debit', $3, 'NGN',
+                                    $4, 'success', 'internal', $5)
+                            ON CONFLICT (reference) DO NOTHING
+                            "#,
+                            Some(receiver.id) as Option<uuid::Uuid>,
+                            fee_ref,
+                            fee_bd,
+                            fee_narration,
+                            serde_json::json!({
+                                "fee_type":   "incoming_transfer_fee",
+                                "linked_ref": event.transaction_ref,
+                                "fee_amount": "35.00",
+                            }),
                         )
-                        VALUES ($1, NULL, $2, 'debit', $3, 'NGN',
-                                'Incoming transfer processing fee', 'success', 'internal', $4)
-                        ON CONFLICT (reference) DO NOTHING
-                        "#,
-                        Some(receiver.id) as Option<uuid::Uuid>,
-                        fee_ref,
-                        fee_bd,
-                        serde_json::json!({
-                            "fee_type":   "incoming_transfer_fee",
-                            "linked_ref": event.transaction_ref,
-                            "fee_amount": "35.00",
-                        }),
-                    )
-                    .execute(db)
-                    .await
-                    .map_err(|e| println!("[worker/transfer_inflow] Fee DB insert error: {}", e));
+                        .execute(db)
+                        .await
+                        .map_err(|e| println!("[worker/transfer_inflow] Fee DB insert error: {}", e));
 
-                    // ── Notify business owner about fee ────────────────────────
-                    if let Some(token) = &receiver.device_token {
-                        send_push_notification(
-                            token,
-                            "Processing Fee Deducted",
-                            &format!(
-                                "A processing fee of ₦35.00 has been deducted from your \
-                                 account for an incoming transfer of ₦{} from {} ({}).",
-                                &event.amount, event.sender_name, event.sender_bank
-                            ),
-                            Some(serde_json::json!({
-                                "route":     "NotificationDetail",
-                                "service":   "transfer_fee",
-                                "status":    "success",
-                                "amount":    "35.00",
-                                "reference": fee_ref,
-                                "narration": format!(
-                                    "Processing fee for ₦{} inflow from {} · {}",
+                        // ── Notify business owner about fee ────────────────────
+                        if let Some(token) = &receiver.device_token {
+                            send_push_notification(
+                                token,
+                                "Processing Fee Deducted",
+                                &format!(
+                                    "A processing fee of ₦35.00 has been deducted from your \
+                                     account for an incoming transfer of ₦{} from {} ({}).",
                                     &event.amount, event.sender_name, event.sender_bank
                                 ),
-                            })),
-                        )
-                        .await;
+                                Some(serde_json::json!({
+                                    "route":     "NotificationDetail",
+                                    "service":   "transfer_fee",
+                                    "status":    "success",
+                                    "amount":    "35.00",
+                                    "reference": fee_ref,
+                                    "narration": format!(
+                                        "Processing fee for ₦{} inflow from {} · {}",
+                                        &event.amount, event.sender_name, event.sender_bank
+                                    ),
+                                })),
+                            )
+                            .await;
+                        }
+                    } else {
+                        println!(
+                            "[worker/transfer_inflow] Fee rejected by PSB — status: '{}', ref: {}",
+                            status, fee_ref
+                        );
                     }
-                } else {
-                    println!(
-                        "[worker/transfer_inflow] Fee rejected by PSB — status: '{}', ref: {}",
-                        status, fee_ref
-                    );
                 }
+                Err(e) => println!(
+                    "[worker/transfer_inflow] Fee PSB error — ref: {}, err: {}",
+                    fee_ref, e
+                ),
             }
-            Err(e) => println!(
-                "[worker/transfer_inflow] Fee PSB error — ref: {}, err: {}",
-                fee_ref, e
-            ),
         }
     }
 
