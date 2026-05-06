@@ -17,8 +17,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use validator::Validate;
 
-// ── TTLs ──────────────────────────────────────────────────────────────────────
-const TTL_3_MIN: u64 = 180;
+const TTL_1_MIN: u64 = 60;
 const TTL_24_HRS: u64 = 86_400;
 
 pub async fn list_mytransaction(
@@ -76,7 +75,8 @@ pub async fn list_mytransaction(
     }
 
     // ── Build dynamic query ───────────────────────────────────────────────────
-    // Fetch any row where the user is sender OR receiver — no channel filtering
+    // Show debit rows only when user is sender, credit rows only when user is receiver.
+    // This prevents internal transfers from appearing twice on either side.
     let mut builder = sqlx::QueryBuilder::new(
         r#"SELECT
                 id, sender_id, reciever_id,
@@ -86,11 +86,15 @@ pub async fn list_mytransaction(
                 balance_before, balance_after,
                 meta, created_at, updated_at
            FROM transactions
-           WHERE (sender_id = "#,
+           WHERE ("#,
     );
+    builder.push("(sender_id = ");
     builder.push_bind(account_uuid);
-    builder.push(" OR reciever_id = ");
+    builder.push(" AND type = 'debit')");
+    builder.push(" OR ");
+    builder.push("(reciever_id = ");
     builder.push_bind(account_uuid);
+    builder.push(" AND type = 'credit')");
     builder.push(")");
 
     if let Some(ref status) = query.status {
@@ -137,7 +141,7 @@ pub async fn list_mytransaction(
         Ok(rows) => rows
             .iter()
             .map(|t| {
-                let tx_type = t.get::<String, _>("type"); // 'debit' or 'credit' — stored at insert time
+                let tx_type = t.get::<String, _>("type");
 
                 serde_json::json!({
                     "id":                      t.get::<uuid::Uuid, _>("id"),
@@ -147,7 +151,7 @@ pub async fn list_mytransaction(
                     "reciever_account_name":   t.get::<Option<String>, _>("reciever_account_name"),
                     "reciever_bank":           t.get::<Option<String>, _>("reciever_bank"),
                     "reference":               t.get::<String, _>("reference"),
-                    "type":                    tx_type, // trust the DB value directly
+                    "type":                    tx_type,
                     "amount":                  t.get::<bigdecimal::BigDecimal, _>("amount").to_string(),
                     "currency":                t.get::<String, _>("currency"),
                     "narration":               t.get::<Option<String>, _>("narration"),
@@ -183,7 +187,7 @@ pub async fn list_mytransaction(
     // ── Cache for 3 min ───────────────────────────────────────────────────────
     let _: Result<(), redis::RedisError> = redis::cmd("SETEX")
         .arg(&cache_key)
-        .arg(TTL_3_MIN)
+        .arg(TTL_1_MIN)
         .arg(data.to_string())
         .query_async(&mut redis_conn)
         .await;
@@ -334,7 +338,7 @@ pub async fn resolve_bank_detail(
     // ── Cache for 3 min ───────────────────────────────────────────────────────
     let _: Result<(), redis::RedisError> = redis::cmd("SETEX")
         .arg(&cache_key)
-        .arg(TTL_3_MIN)
+        .arg(TTL_1_MIN)
         .arg(data.to_string())
         .query_async(&mut redis_conn)
         .await;
@@ -511,8 +515,9 @@ pub async fn getbank_success_rate(
                 COUNT(*)                                           AS total,
                 COUNT(*) FILTER (WHERE status = 'success')        AS successful
             FROM transactions
-            WHERE channel = 'internal'
-              AND status  IN ('success', 'failed')
+            WHERE channel    = 'internal'
+              AND status     IN ('success', 'failed')
+              AND created_at >= NOW() - INTERVAL '24 hours'
             "#
         )
         .fetch_one(db.get_ref())
@@ -535,9 +540,10 @@ pub async fn getbank_success_rate(
                 COUNT(*)                                           AS total,
                 COUNT(*) FILTER (WHERE status = 'success')        AS successful
             FROM transactions
-            WHERE channel  = 'external'
-              AND status   IN ('success', 'failed')
+            WHERE channel    = 'external'
+              AND status     IN ('success', 'failed')
               AND reciever_bank = $1
+              AND created_at >= NOW() - INTERVAL '24 hours'
             "#,
             bank_code
         )
