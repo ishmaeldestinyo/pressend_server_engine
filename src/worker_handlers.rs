@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::modules::account::schemas::Gender;
 use crate::modules::legacy_plan::events::{
     LegacyPlanBeneficiaryAddedEvent, LegacyPlanBeneficiaryDeletedEvent,
 };
@@ -14,7 +13,7 @@ use crate::utils::psb::PsbClient;
 use crate::utils::vas::VasClient;
 use crate::worker_events::{
     AccountLoggedInNotificationEvent, ChangeEmailEvent, ChangePasswordEvent, DeleteAccountEvent,
-    InboundTransferEvent, KycUpgradeStatusEvent, NewDeviceLoginEvent, OpenWalletEvent,
+    InboundTransferEvent, KycUpgradeStatusEvent, NewDeviceLoginEvent,
     SetPaymentPinEvent, SignupEvent, SuspiciousLoginEvent, Tier2UpgradeEvent, Tier3UpgradeEvent,
     UpdateDeviceIdEvent, VerifyEmailEvent,
 };
@@ -28,6 +27,7 @@ use uuid::Uuid;
 pub async fn handle_signup(
     payload: &str,
     db: &PgPool,
+    cfg: &Config,
     redis: &redis::aio::ConnectionManager,
     mailer: &Mailer,
 ) {
@@ -77,18 +77,123 @@ pub async fn handle_signup(
                 }
             };
 
-            // ── 3. Create account in DB ───────────────────────────────────────
-            let account_id = Uuid::new_v4();
+            // ── 3. Open 9PSB wallet BEFORE insert ────────────────────────────
+            let new_id = Uuid::new_v4();
+
+            let gender_code = match event.gender.to_uppercase().as_str() {
+                "MALE" => 0,
+                "FEMALE" => 1,
+                _ => 0,
+            };
+
+            let other_names = format!("{} {}", event.firstname, event.middlename);
+
+            // convert date from yyyy-MM-dd to dd/MM/yyyy
+            let date_of_birth = {
+                let parts: Vec<&str> = event.date_of_birth.split('-').collect();
+                if parts.len() == 3 {
+                    format!("{}/{}/{}", parts[2], parts[1], parts[0])
+                } else {
+                    event.date_of_birth.clone()
+                }
+            };
+
+            let open_wallet_body = serde_json::json!({
+                "transactionTrackingRef": new_id.to_string(),
+                "lastName":               event.lastname,
+                "otherNames":             other_names,
+                "phoneNo":                event.mobile_number,
+                "gender":                 gender_code,
+                "dateOfBirth":            date_of_birth,
+                "address":                event.address,
+                "nationalIdentityNo":     event.nin,
+                "email":                  event.email,
+            });
+
+            println!(
+                "[worker/signup] 9PSB request body: {}",
+                serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
+            );
+
+            let mut redis_conn = redis.clone();
+            let json = match PsbClient::new(cfg)
+                .post(&mut redis_conn, "/waas/api/v1/open_wallet", &open_wallet_body)
+                .await
+            {
+                Ok(j) => {
+                    println!(
+                        "[worker/signup] 9PSB full response: {}",
+                        serde_json::to_string_pretty(&j).unwrap_or_else(|_| j.to_string())
+                    );
+                    j
+                }
+                Err(e) => {
+                    println!("[worker/signup] 9PSB wallet open failed: {}", e);
+                    return;
+                }
+            };
+
+            let status_str = json["status"].as_str().unwrap_or("").to_uppercase();
+            if status_str != "SUCCESS" {
+                println!(
+                    "[worker/signup] 9PSB rejected — status: '{}', message: '{}', data: {}",
+                    status_str,
+                    json["message"].as_str().unwrap_or("no message"),
+                    serde_json::to_string_pretty(&json["data"]).unwrap_or_default()
+                );
+                return;
+            }
+
+            let account_number = json["data"]["accountNumber"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let account_name = json["data"]["fullName"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+
+            if account_number.is_empty() {
+                println!("[worker/signup] accountNumber empty in 9PSB response");
+                return;
+            }
+
+            // ── 4. Single insert with everything ─────────────────────────────
             let result = sqlx::query!(
                 r#"
-                INSERT INTO accounts (id, email, password_hash, device_id, account_type, status, email_verified)
-                VALUES ($1, $2, $3, $4, $5, 'active', false)
+                INSERT INTO accounts (
+                    id, email, password_hash, device_id, account_type,
+                    firstname, lastname, othername, phone_number,
+                    date_of_birth, gender, nin, address,
+                    account_number, account_name, bank_name,
+                    current_tier, tier_upgraded_at,
+                    status, email_verified
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8, $9,
+                    $10, $11, $12, $13,
+                    $14, $15, $16,
+                    1, NOW(),
+                    'active', false
+                )
                 "#,
-                account_id,
+                new_id,
                 event.email,
                 password_hash,
                 event.device_id,
                 event.account_type,
+                event.firstname,
+                event.lastname,
+                event.middlename,
+                event.mobile_number,
+                event.date_of_birth,
+                event.gender,
+                event.nin,
+                event.address,
+                account_number,
+                account_name,
+                "9PSB",
             )
             .execute(db)
             .await;
@@ -98,11 +203,14 @@ pub async fn handle_signup(
                 return;
             }
 
-            println!("[worker/signup] Account created: {}", event.email);
+            println!(
+                "[worker/signup] Account created with wallet — email: {}, account_number: {}",
+                event.email, account_number
+            );
         }
-    }
+    };
 
-    // ── 4. Generate + hash OTP ────────────────────────────────────────────────
+    // ── 5. Generate + hash OTP ────────────────────────────────────────────────
     let otp = generate_otp();
 
     let otp_hash = match hash_password(&otp) {
@@ -113,7 +221,7 @@ pub async fn handle_signup(
         }
     };
 
-    // ── 5. Store hashed OTP in Redis — TTL 10 minutes ─────────────────────────
+    // ── 6. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
     let mut redis_conn = redis.clone();
     match redis::cmd("SETEX")
         .arg(&event.otp_redis_key)
@@ -126,13 +234,14 @@ pub async fn handle_signup(
         Err(e) => println!("[worker/signup] Redis store error: {}", e),
     }
 
-    // ── 6. Send plain OTP in email ────────────────────────────────────────────
+    // ── 7. Send plain OTP in email ────────────────────────────────────────────
     if let Err(e) = mailer.send_otp(&event.email, "", &otp).await {
         println!("[worker/signup] OTP email error: {}", e);
     }
 
     println!("[worker/signup] Done: {}", event.email);
 }
+
 
 pub async fn handle_resend_otp(
     payload: &str,
@@ -599,255 +708,6 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
             Err(e) => log::error!("[worker/kyc_upgrade_status] DB error: {}", e),
         }
     }
-}
-
-pub async fn handle_open_wallet(
-    payload: &str,
-    db: &PgPool,
-    cfg: &Config,
-    redis: &mut ConnectionManager,
-) {
-    tracing::info!("[open_wallet] ── Handler started ──────────────────────────");
-    tracing::info!("[open_wallet] Raw payload: {}", payload);
-
-    let event: OpenWalletEvent = match serde_json::from_str(payload) {
-        Ok(e) => e,
-        Err(e) => {
-            println!("[worker/tier1_upgrade] Invalid payload: {}", e);
-            return;
-        }
-    };
-
-    // ── Parse UUID ────────────────────────────────────────────────────────────
-    let account_uuid = match uuid::Uuid::parse_str(&event.account_id) {
-        Ok(id) => {
-            tracing::info!("[open_wallet] Parsed UUID: {}", id);
-            id
-        }
-        Err(e) => {
-            tracing::error!(
-                "[open_wallet] Invalid account_id '{}': {}",
-                event.account_id,
-                e
-            );
-            return;
-        }
-    };
-
-    // ── Fetch account ─────────────────────────────────────────────────────────
-    tracing::info!("[open_wallet] Fetching account from DB: {}", account_uuid);
-
-    let row = match sqlx::query!(
-        "SELECT current_tier, status, email FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_optional(db)
-    .await
-    {
-        Ok(Some(r)) => {
-            tracing::info!(
-                "[open_wallet] Account found — email: {}, status: {}, current_tier: {}",
-                r.email,
-                r.status,
-                r.current_tier
-            );
-            r
-        }
-        Ok(None) => {
-            tracing::warn!("[open_wallet] Account not found: {}", account_uuid);
-            return;
-        }
-        Err(e) => {
-            tracing::error!(
-                "[open_wallet] DB error fetching account {}: {}",
-                account_uuid,
-                e
-            );
-            return;
-        }
-    };
-
-    // ── Guards ────────────────────────────────────────────────────────────────
-    if row.status != "active" {
-        tracing::warn!(
-            "[open_wallet] Account not active — status: '{}', account: {}",
-            row.status,
-            account_uuid
-        );
-        return;
-    }
-
-    if row.current_tier >= 1 {
-        tracing::warn!(
-            "[open_wallet] Already tier {} — skipping: {}",
-            row.current_tier,
-            account_uuid
-        );
-        return;
-    }
-
-    tracing::info!("[open_wallet] Guards passed — calling 9PSB");
-
-    // ── Build request body ────────────────────────────────────────────────────
-    let gender_code = match event.gender {
-        Gender::MALE => 0,
-        Gender::FEMALE => 1,
-    };
-    let other_names = format!("{} {}", event.firstname, event.othername);
-
-    let open_wallet_body = serde_json::json!({
-        "transactionTrackingRef": event.account_id,
-        "lastName":               event.lastname,
-        "otherNames":             other_names,
-        "phoneNo":                event.phone_no,
-        "gender":                 gender_code,
-        "dateOfBirth":            event.date_of_birth,
-        "address":                event.address,
-        "nationalIdentityNo":     event.nin,
-        "ninUserId":              event.nin_userid,
-        "bvn":                    event.bvn,
-        "email":                  row.email,
-    });
-
-    tracing::info!(
-        "[open_wallet] 9PSB request body: {}",
-        serde_json::to_string_pretty(&open_wallet_body)
-            .unwrap_or_else(|_| open_wallet_body.to_string())
-    );
-
-    // ── Call 9PSB ─────────────────────────────────────────────────────────────
-    tracing::info!("[open_wallet] Sending to 9PSB /waas/api/v1/open_wallet ...");
-
-    let json = match PsbClient::new(cfg)
-        .post(redis, "/waas/api/v1/open_wallet", &open_wallet_body)
-        .await
-    {
-        Ok(j) => {
-            tracing::info!(
-                "[open_wallet] 9PSB response: {}",
-                serde_json::to_string_pretty(&j).unwrap_or_else(|_| j.to_string())
-            );
-            j
-        }
-        Err(e) => {
-            tracing::error!(
-                "[open_wallet] 9PSB request failed for {}: {}",
-                account_uuid,
-                e
-            );
-            return;
-        }
-    };
-
-    // ── Check status ──────────────────────────────────────────────────────────
-    let status_str = json["status"].as_str().unwrap_or("").to_uppercase();
-    tracing::info!("[open_wallet] 9PSB status field: '{}'", status_str);
-
-    if status_str != "SUCCESS" {
-        tracing::warn!(
-            "[open_wallet] 9PSB rejected — status: '{}', account: {}, full response: {}",
-            status_str,
-            account_uuid,
-            serde_json::to_string_pretty(&json).unwrap_or_else(|_| json.to_string())
-        );
-        return;
-    }
-
-    // ── Extract fields ────────────────────────────────────────────────────────
-    let account_number = json["data"]["accountNumber"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let account_name = json["data"]["fullName"].as_str().unwrap_or("").to_string();
-
-    tracing::info!(
-        "[open_wallet] Extracted — account_number: '{}', account_name: '{}'",
-        account_number,
-        account_name
-    );
-
-    if account_number.is_empty() {
-        tracing::error!(
-            "[open_wallet] accountNumber empty in 9PSB response — account: {}, data: {:?}",
-            account_uuid,
-            json["data"]
-        );
-        return;
-    }
-
-    // ── Single DB write ───────────────────────────────────────────────────────
-    tracing::info!(
-        "[open_wallet] Writing to DB — account: {}, account_number: {}, account_name: {}",
-        account_uuid,
-        account_number,
-        account_name
-    );
-
-    match sqlx::query!(
-        r#"UPDATE accounts SET
-            account_number   = $2,
-            account_name     = $3,
-            firstname        = $4,
-            lastname         = $5,
-            othername        = $6,
-            bank_name        = $7,
-            bvn              = $8,
-            nin              = $9,
-            nin_userid       = $10,
-            phone_number     = $11,
-            address          = $12,
-            date_of_birth    = $13,
-            gender           = $14,
-            current_tier=1,
-            tier_upgraded_at=  NOW(),
-            updated_at       = NOW()
-        WHERE id = $1"#,
-        account_uuid,
-        account_number,
-        account_name,
-        event.firstname,
-        event.lastname,
-        event.othername,
-        "9PSB",
-        event.bvn,
-        event.nin,
-        event.nin_userid,
-        event.phone_no,
-        event.address,
-        event.date_of_birth,
-        gender_code as i32,
-    )
-    .execute(db)
-    .await
-    {
-        Ok(res) => {
-            tracing::info!(
-                "[open_wallet] DB write OK — rows_affected: {}, account: {}, account_number: {}",
-                res.rows_affected(),
-                account_uuid,
-                account_number
-            );
-            if res.rows_affected() == 0 {
-                tracing::warn!(
-                    "[open_wallet] 0 rows affected — account may be deleted: {}",
-                    account_uuid
-                );
-            }
-        }
-        Err(e) => {
-            tracing::error!(
-                "[open_wallet] DB write FAILED — account: {}, error: {}",
-                account_uuid,
-                e
-            );
-        }
-    }
-
-    tracing::info!(
-        "[open_wallet] ── Complete — account: {}, account_number: {} ──",
-        account_uuid,
-        account_number
-    );
 }
 
 pub async fn handle_tier2_upgrade(

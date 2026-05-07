@@ -1,8 +1,9 @@
 use crate::config::Config;
 use crate::config::KafkaConfig;
+use crate::utils::monnify::MonnifyClient;
 use crate::kafka::KafkaProducer;
 use crate::modules::account::schemas;
-use crate::modules::account::schemas::OpenWalletRequest;
+use redis::aio::ConnectionManager;
 use crate::modules::account::schemas::UpdateDeviceTokenRequest;
 use crate::utils::jwt::{AuthUser, generate_access_token, generate_refresh_token, verify_token};
 use crate::utils::password_manager::hash_password;
@@ -14,7 +15,7 @@ use crate::utils::responder::{ApiResponse, AuthResponse, ResponseStatus};
 use crate::worker_events::SetPaymentPinEvent;
 use crate::worker_events::{
     AccountLoggedInNotificationEvent, ChangeEmailEvent, ChangePasswordEvent, DeleteAccountEvent,
-    NewDeviceLoginEvent, OpenWalletEvent, SendOTPEvent, SignupEvent, SuspiciousLoginEvent,
+    NewDeviceLoginEvent, SendOTPEvent, SignupEvent, SuspiciousLoginEvent,
     Tier2UpgradeEvent, Tier3UpgradeEvent, UpdateDeviceIdEvent, VerifyEmailEvent,
 };
 use crate::worker_handlers::generate_otp;
@@ -29,15 +30,41 @@ pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
+    monnify: web::Data<MonnifyClient>,
+    redis: web::Data<ConnectionManager>,
 ) -> impl Responder {
-    
+
+    println!("[signup] Handler reached");
+
+    // validate request body
     if let Err(errors) = body.0.validate() {
+        println!("[signup] Validation failed: {:?}", errors);
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
             status: "error",
             message: "Invalid input",
             errors,
         });
     }
+
+    println!("[signup] Validation passed");
+    println!("[signup] Calling Monnify NIN verify for: {}", body.nin);
+
+    let mut redis_conn = redis.get_ref().clone();
+    let nin_details = match monnify.verify_nin(&mut redis_conn, &body.nin).await {
+        Ok(details) => {
+            println!("[signup] NIN verified successfully");
+            details
+        }
+        Err(e) => {
+            println!("[signup] NIN verification error: {}", e);
+            return HttpResponse::BadRequest().json(ApiResponse {
+                message: format!("NIN verification failed: {}", e),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    println!("[signup] Building event");
 
     let otp_redis_key = format!("{}.verify.otp", body.email);
 
@@ -46,16 +73,30 @@ pub async fn signup(
         password: body.password.clone(),
         device_id: body.device_id.clone(),
         account_type: body.account_type.to_string(),
+        address: body.address.clone(),
         otp_redis_key,
+        nin: body.nin.clone(),
+        firstname: nin_details.first_name,
+        lastname: nin_details.last_name,
+        middlename: nin_details.middle_name,
+        date_of_birth: nin_details.date_of_birth,
+        gender: nin_details.gender,
+        mobile_number: nin_details.mobile_number,
     };
 
+    println!("[signup] Publishing to Kafka");
+
     kafka.publish(&kafka_cfg.kafka_topic_account_signup, &body.email, &event);
+
+    println!("[signup] Done");
 
     HttpResponse::Created().json(ApiResponse {
         message: "Check your inbox for an OTP".into(),
         status: ResponseStatus::SUCCESS,
     })
 }
+
+
 
 pub async fn send_otp(
     body: web::Json<schemas::SendOTPRequest>,
@@ -1816,54 +1857,6 @@ pub async fn change_email_submit(
     })
 }
 
-
-
-pub async fn open_wallet(
-    auth: AuthUser,
-    body: web::Json<OpenWalletRequest>,
-    kafka: web::Data<KafkaProducer>,
-    kafka_cfg: web::Data<KafkaConfig>,
-) -> impl Responder {
-    let account_id = auth.id.clone();
-
-    // ── Validate request ──────────────────────────────────────────────────────
-    if let Err(errors) = body.0.validate() {
-        return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
-            status: "error",
-            message: "Invalid input",
-            errors,
-        });
-    }
-
-    if let Err(e) = body.0.validate_nin_or_bvn() {
-        return HttpResponse::UnprocessableEntity().json(ApiResponse {
-            message: e.message.unwrap_or("Validation failed".into()).to_string(),
-            status: ResponseStatus::ERROR,
-        });
-    }
-
-    // ── Fire and forget ───────────────────────────────────────────────────────
-    let event = OpenWalletEvent {
-        account_id: account_id.clone(),
-        firstname: body.firstname.clone(),
-        lastname: body.lastname.clone(),
-        othername: body.othername.clone().unwrap_or_default(),
-        phone_no: body.phone_no.clone(),
-        gender: body.gender.clone(),
-        date_of_birth: body.date_of_birth.clone(),
-        address: body.address.clone(),
-        nin: body.nin.clone(),
-        nin_userid: body.nin_userid.clone(),
-        bvn: body.bvn.clone(),
-    };
-
-    kafka.publish(&kafka_cfg.kafka_topic_open_wallet, &account_id, &event);
-
-    HttpResponse::Accepted().json(ApiResponse {
-        message: "Your security threat check is been validated".into(),
-        status: ResponseStatus::SUCCESS,
-    })
-}
 
 pub async fn upgrade_tier2(
     auth: AuthUser,

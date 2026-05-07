@@ -1,15 +1,23 @@
 use serde::{Serialize, Deserialize};
 
-use crate::modules::account::schemas::Gender;
-
 #[derive(Serialize, Deserialize)]
 pub struct SignupEvent {
     pub email: String,
     pub password: String,
     pub device_id: String,
     pub account_type: String,
+    pub address: String,
     pub otp_redis_key: String,
+    // from Monnify NIN lookup
+    pub nin: String,
+    pub firstname: String,
+    pub lastname: String,
+    pub middlename: String,
+    pub date_of_birth: String,
+    pub gender: String,
+    pub mobile_number: String,
 }
+
 
 #[derive(Serialize, Deserialize)]
 pub struct VerifyEmailEvent {
@@ -79,22 +87,6 @@ pub struct ChangeEmailEvent {
     pub old_email: String,
     pub new_email: String,
     pub firstname: String,
-}
-
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct OpenWalletEvent {
-    pub account_id: String,
-    pub firstname: String,
-    pub lastname: String,
-    pub othername: String,
-    pub phone_no: String,
-    pub gender: Gender,
-    pub date_of_birth: String,
-    pub address: String,
-    pub nin: Option<String>,
-    pub nin_userid: Option<String>,
-    pub bvn: Option<String>,
 }
 
 

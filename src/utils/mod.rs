@@ -9,3 +9,5 @@ pub mod transaction_utils;
 pub mod fms;
 pub mod vas;
 pub mod rate_limit;
+
+pub mod monnify;

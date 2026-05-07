@@ -5,12 +5,6 @@ use std::fmt;
 use std::sync::OnceLock;
 use validator::{Validate, ValidationError};
 
-static NIN_USERID_REGEX: OnceLock<Regex> = OnceLock::new();
-
-fn nin_userid_regex() -> &'static Regex {
-    NIN_USERID_REGEX.get_or_init(|| Regex::new(r"^[A-Za-z]{6}-\d{4}$").unwrap())
-}
-
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
 #[allow(dead_code)]
@@ -64,6 +58,16 @@ pub struct SignupRequest {
 
     #[validate(custom(function = "validate_password"))]
     pub password: String,
+
+    #[validate(length(min = 11, max = 11, message = "NIN must be exactly 11 characters"))]
+    pub nin: String,
+
+    #[validate(length(
+        min = 1,
+        max = 100,
+        message = "Address is required and must not exceed 100 characters"
+    ))]
+    pub address: String,
 }
 
 #[derive(Deserialize, Serialize, Validate)]
@@ -134,64 +138,6 @@ pub struct ResetPasswordSubmit {
     pub new_password: String,
 }
 
-// ── Tier 1 ────────────────────────────────────────────────────────────────────
-#[derive(Deserialize, Serialize, Validate)]
-pub struct OpenWalletRequest {
-    #[validate(length(min = 1, max = 255, message = "First name is required"))]
-    pub firstname: String,
-
-    #[validate(length(min = 1, max = 255, message = "Last name is required"))]
-    pub lastname: String,
-
-    pub othername: Option<String>,
-
-    #[validate(length(min = 11, max = 11, message = "Phone number must be 11 digits"))]
-    pub phone_no: String,
-
-    pub gender: Gender,
-
-    // Format: dd/MM/yyyy
-    #[validate(length(
-        min = 10,
-        max = 10,
-        message = "Date of birth must be in dd/MM/yyyy format"
-    ))]
-    pub date_of_birth: String,
-
-    #[validate(length(
-        min = 1,
-        max = 100,
-        message = "Address is required and must not exceed 100 characters"
-    ))]
-    pub address: String,
-
-    #[validate(length(min = 11, max = 11, message = "NIN must be 11 characters"))]
-    pub nin: Option<String>,
-
-    #[validate(regex(
-        path = "nin_userid_regex()",
-        message = "NIN User ID must be in format ABCDEF-0123"
-    ))]
-    pub nin_userid: Option<String>,
-
-    #[validate(length(min = 11, max = 11, message = "BVN must be 11 characters"))]
-    pub bvn: Option<String>,
-}
-
-impl OpenWalletRequest {
-    pub fn validate_nin_or_bvn(&self) -> Result<(), ValidationError> {
-        let has_bvn = self.bvn.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-        let has_nin = self.nin.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-
-        if !has_bvn && !has_nin {
-            let mut err = ValidationError::new("nin_or_bvn_required");
-            err.message = Some("Either BVN or NIN must be provided".into());
-            return Err(err);
-        }
-
-        Ok(())
-    }
-}
 
 // ── Tier 2 — reuses bvn, nin, phone_no from DB; only asks for new fields ──────
 #[derive(Deserialize, Serialize, Validate)]
@@ -326,3 +272,4 @@ pub struct UpdateDeviceTokenRequest {
     #[validate(length(min = 1, message = "Device token cannot be empty"))]
     pub device_token: String,
 }
+

@@ -1,14 +1,15 @@
 use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, web};
 use blinq_server::utils::mailer::Mailer;
+use blinq_server::utils::monnify::MonnifyClient;
 use blinq_server::utils::psb::PsbClient;
 use blinq_server::{config, cron, db, kafka, modules, redis};
 
-// Import your governor creators
 use blinq_server::middlewares::governors::{strict_governor, mutating_governor};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    
     const PORT: u16 = 8080;
 
     env_logger::init();
@@ -53,8 +54,6 @@ async fn main() -> std::io::Result<()> {
     let redis_data = web::Data::new(redis_raw);
     let kafka_producer = web::Data::new(kafka_producer_raw);
 
-    // --- SHARED RATE LIMIT STATE ---
-    // Created once here so all worker threads share the same counters
     let strict_gov = web::Data::new(strict_governor());
     let mutating_gov = web::Data::new(mutating_governor());
 
@@ -70,6 +69,7 @@ async fn main() -> std::io::Result<()> {
     );
 
     let psb = web::Data::new(PsbClient::new(&cfg));
+    let monnify = web::Data::new(MonnifyClient::new(cfg.get_ref()));
 
     println!("Blinq Server running on port {}", PORT);
 
@@ -83,6 +83,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(redis_data.clone())
             .app_data(mailer.clone())
             .app_data(psb.clone())
+            .app_data(monnify.clone())
             .app_data(kafka_producer.clone())
             .app_data(strict_gov.clone())
             .app_data(mutating_gov.clone())

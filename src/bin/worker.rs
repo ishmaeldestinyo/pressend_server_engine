@@ -3,8 +3,7 @@ use blinq_server::worker_handlers::{
     handle_account_loggedin_notification, handle_airtime_purchase,
     handle_change_email, handle_change_password, handle_delete_account, handle_device_update,
     handle_external_transfer, handle_internal_transfer, handle_kyc_upgrade_status,
-    handle_legacy_beneficiary_added, handle_legacy_beneficiary_deleted, handle_new_device_login,
-    handle_open_wallet, handle_resend_otp, handle_set_payment_pin, handle_signup,
+    handle_legacy_beneficiary_added, handle_legacy_beneficiary_deleted, handle_new_device_login, handle_resend_otp, handle_set_payment_pin, handle_signup,
     handle_suspicious_login, handle_tier2_upgrade, handle_tier3_upgrade, handle_transfer_inflow,
     handle_verify_email,
     handle_data_purchase,
@@ -120,8 +119,6 @@ async fn main() {
 
     let topic_email_change_submit = std::env::var("KAFKA_TOPIC_EMAIL_CHANGE_SUBMIT").unwrap();
 
-    let kafka_topic_open_wallet = std::env::var("KAFKA_TOPIC_OPEN_WALLET").unwrap();
-
     let kafka_topic_vas_airtime_requested =
         std::env::var("KAFKA_TOPIC_VAS_AIRTIME_REQUESTED").unwrap();
 
@@ -162,7 +159,6 @@ async fn main() {
             TopicReplication::Fixed(1),
         ),
         NewTopic::new(&topic_kyc_upgrade_status, 1, TopicReplication::Fixed(1)),
-        NewTopic::new(&kafka_topic_open_wallet, 1, TopicReplication::Fixed(1)),
         NewTopic::new(&topic_email_change_submit, 1, TopicReplication::Fixed(1)),
         NewTopic::new(&topic_tier2_upgrade, 1, TopicReplication::Fixed(1)),
         NewTopic::new(&topic_tier3_upgrade, 1, TopicReplication::Fixed(1)),
@@ -233,7 +229,6 @@ async fn main() {
             topic_device_update.as_str(),
             kafka_account_login_successful.as_str(),
             topic_email_change_submit.as_str(),
-            kafka_topic_open_wallet.as_str(),
             topic_kyc_upgrade_status.as_str(),
             topic_tier2_upgrade.as_str(),
             topic_tier3_upgrade.as_str(),
@@ -267,7 +262,7 @@ async fn main() {
                 };
 
                 if topic == topic_signup {
-                    handle_signup(&payload, &db_pool, &redis, &mailer).await;
+                    handle_signup(&payload, &db_pool, &app_cfg, &mut redis.clone(), &mailer).await;
                 } else if topic == topic_otp_send {
                     handle_resend_otp(&payload, &redis, &mailer).await;
                 } else if topic == topic_otp_verify {
@@ -286,9 +281,7 @@ async fn main() {
                     handle_account_loggedin_notification(&payload, &mailer).await;
                 } else if topic == topic_email_change_submit {
                     handle_change_email(&payload, &db_pool, &mailer).await;
-                } else if topic == kafka_topic_open_wallet {
-                    handle_open_wallet(&payload, &db_pool, &app_cfg, &mut redis.clone()).await;
-                } else if topic == topic_kyc_upgrade_status {
+                }else if topic == topic_kyc_upgrade_status {
                     handle_kyc_upgrade_status(&payload, &db_pool, &mailer).await;
                 } else if topic == topic_tier2_upgrade {
                     handle_tier2_upgrade(&payload, &db_pool, &app_cfg, &mut redis.clone()).await;

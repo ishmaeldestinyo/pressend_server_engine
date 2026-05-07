@@ -32,6 +32,14 @@ pub struct Config {
 
     pub _9psb_operational_account: String,
 
+    // monnify api configuration
+    pub monnify_apikey: String,
+    pub monnify_secret_key: String,
+    pub monnify_contract_code: String,
+
+    pub monnify_test_mode: String,
+
+
     pub vas_username: String,
     pub vas_password: String,
 
@@ -44,6 +52,15 @@ impl Config {
         dotenvy::dotenv_override().ok();
         Self {
             palm_api_url: env::var("PALM_API_URL").expect("PALM_API_URL must be set"),
+
+            // monnify impl
+             monnify_apikey: env::var("MONNIFY_APIKEY").expect("MONNIFY_APIKEY must be set"),
+
+             monnify_secret_key: env::var("MONNIFY_SECRET_KEY").expect("MONNIFY_SECRET_KEY must be set"),
+
+            monnify_contract_code: env::var("MONNIFY_CONTRACT_CODE").expect("MONNIFY_CONTRACT_CODE must be set"),
+
+            monnify_test_mode: env::var("MONNIFY_TEST_MODE").expect("MONNIFY_TEST_MODE must be set"),
 
             app_name: env::var("APPLICATION_NAME").expect("APPLICATION_NAME must be set"),
             app_base_url: env::var("APPLICATION_BASEURL").expect("APPLICATION_BASEURL must be set"),

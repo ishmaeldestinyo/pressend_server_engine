@@ -33,7 +33,6 @@ pub fn config(
             .route("/palm/{palm_type}", web::delete().to(handlers::delete_palm).wrap(Governor::new(&mutating_gov)))
             .route("/password/change", web::put().to(handlers::change_password).wrap(Governor::new(&mutating_gov)))
             .route("/delete", web::delete().to(handlers::delete_account).wrap(Governor::new(&mutating_gov)))
-            .route("/open-wallet", web::post().to(handlers::open_wallet).wrap(Governor::new(&mutating_gov)))
             .route("/kyc-upgrade/tier2", web::post().to(handlers::upgrade_tier2).wrap(Governor::new(&mutating_gov)))
             .route("/kyc-upgrade/tier3", web::post().to(handlers::upgrade_tier3).wrap(Governor::new(&mutating_gov)))
             .route("/panic/setup", web::post().to(handlers::toggle_panic).wrap(Governor::new(&mutating_gov)))
