@@ -35,7 +35,6 @@ pub fn config(
             .route("/delete", web::delete().to(handlers::delete_account).wrap(Governor::new(&mutating_gov)))
             .route("/kyc-upgrade/tier2", web::post().to(handlers::upgrade_tier2).wrap(Governor::new(&mutating_gov)))
             .route("/kyc-upgrade/tier3", web::post().to(handlers::upgrade_tier3).wrap(Governor::new(&mutating_gov)))
-            .route("/panic/setup", web::post().to(handlers::toggle_panic).wrap(Governor::new(&mutating_gov)))
             .route("/device-token", web::patch().to(handlers::update_device_token).wrap(Governor::new(&mutating_gov)))
 
             // --- READ ROUTES ---

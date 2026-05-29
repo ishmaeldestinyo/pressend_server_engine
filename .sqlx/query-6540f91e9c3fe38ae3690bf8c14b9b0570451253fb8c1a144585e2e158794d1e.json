@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at\n               FROM accounts WHERE id = $1",
+  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at\n               FROM accounts WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -60,81 +60,86 @@
       },
       {
         "ordinal": 11,
+        "name": "user_photo",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
         "name": "device_id",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "current_tier",
         "type_info": "Int2"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "pending_tier_upgrade",
         "type_info": "Int2"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "tier_upgraded_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "tier_upgrade_requested_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "panic_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "panic_message",
         "type_info": "Text"
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "panic_activated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "panic_deactivated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "account_number",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "account_name",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 22,
+        "ordinal": 23,
         "name": "bvn",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 23,
+        "ordinal": 24,
         "name": "nin",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 24,
+        "ordinal": 25,
         "name": "nin_userid",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 25,
+        "ordinal": 26,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 26,
+        "ordinal": 27,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -157,6 +162,7 @@
       false,
       false,
       true,
+      true,
       false,
       true,
       true,
@@ -174,5 +180,5 @@
       false
     ]
   },
-  "hash": "3fe546671586802b1e39c2c363341c3a1ead40cf3a1192f3de2acff0deeb1974"
+  "hash": "6540f91e9c3fe38ae3690bf8c14b9b0570451253fb8c1a144585e2e158794d1e"
 }

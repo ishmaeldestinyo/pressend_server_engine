@@ -1,10 +1,9 @@
 use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, web};
 use blinq_server::utils::mailer::Mailer;
-use blinq_server::utils::monnify::MonnifyClient;
 use blinq_server::utils::psb::PsbClient;
-use blinq_server::{config, cron, db, kafka, modules, redis};
-
+use blinq_server::utils::dojah::{Config as DojahConfig, DojahClient};
+use blinq_server::{config, db, kafka, modules, redis};
 use blinq_server::middlewares::governors::{strict_governor, mutating_governor};
 
 #[actix_web::main]
@@ -62,14 +61,8 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("❌ Failed to run migrations");
 
-    cron::legacy_executor::spawn(
-        db_pool.get_ref().clone(),
-        redis_data.get_ref().clone(),
-        cfg.get_ref().clone(),
-    );
-
     let psb = web::Data::new(PsbClient::new(&cfg));
-    let monnify = web::Data::new(MonnifyClient::new(cfg.get_ref()));
+    let dojah = web::Data::new(DojahClient::new(DojahConfig::new(&cfg.dojah_app_id, &cfg.dojah_sk)));
 
     println!("Blinq Server running on port {}", PORT);
 
@@ -77,19 +70,19 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(Cors::permissive())
             .app_data(cfg.clone())
+            .app_data(dojah.clone())
             .app_data(kafka_cfg.clone())
             .app_data(db_pool.clone())
             .app_data(http_client.clone())
             .app_data(redis_data.clone())
             .app_data(mailer.clone())
             .app_data(psb.clone())
-            .app_data(monnify.clone())
             .app_data(kafka_producer.clone())
             .app_data(strict_gov.clone())
             .app_data(mutating_gov.clone())
             .app_data(
                 web::JsonConfig::default()
-                    .limit(20 * 1024 * 1024)
+                    .limit(100 * 1024 * 1024)
                     .error_handler(|err, _| {
                         let message = err.to_string();
                         actix_web::error::InternalError::from_response(
@@ -108,10 +101,6 @@ async fn main() -> std::io::Result<()> {
                         let s = strict_gov.clone();
                         let m = mutating_gov.clone();
                         move |sc| modules::account::routes::config(sc, s, m)
-                    })
-                    .configure({
-                        let m = mutating_gov.clone();
-                        move |sc| modules::legacy_plan::routes::config(sc, m)
                     })
                     .configure({
                         let m = mutating_gov.clone();

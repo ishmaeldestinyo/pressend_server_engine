@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts SET\n                    panic_enabled = TRUE,\n                    panic_message = $1,\n                    panic_activated_at = NOW(),\n                    panic_deactivated_at = NULL,\n                    updated_at = NOW()\n                WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed180cfc5ae0d7f36390fb0909b6a158b054f8ed8b9c94e0f2d4ca306106671f"
+}

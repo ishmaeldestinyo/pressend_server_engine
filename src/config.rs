@@ -32,19 +32,19 @@ pub struct Config {
 
     pub _9psb_operational_account: String,
 
-    // monnify api configuration
-    pub monnify_apikey: String,
-    pub monnify_secret_key: String,
-    pub monnify_contract_code: String,
-
-    pub monnify_test_mode: String,
-
-
     pub vas_username: String,
     pub vas_password: String,
 
     pub psb_webhook_username: String,
     pub psb_webhook_password: String,
+
+
+    // dojah credentials
+    pub dojah_pk: String,
+    pub dojah_sk: String,
+    pub dojah_app_id: String,
+    pub dojah_webhook_url: String,
+
 }
 
 impl Config {
@@ -53,15 +53,6 @@ impl Config {
         Self {
             palm_api_url: env::var("PALM_API_URL").expect("PALM_API_URL must be set"),
 
-            // monnify impl
-             monnify_apikey: env::var("MONNIFY_APIKEY").expect("MONNIFY_APIKEY must be set"),
-
-             monnify_secret_key: env::var("MONNIFY_SECRET_KEY").expect("MONNIFY_SECRET_KEY must be set"),
-
-            monnify_contract_code: env::var("MONNIFY_CONTRACT_CODE").expect("MONNIFY_CONTRACT_CODE must be set"),
-
-            monnify_test_mode: env::var("MONNIFY_TEST_MODE").expect("MONNIFY_TEST_MODE must be set"),
-
             app_name: env::var("APPLICATION_NAME").expect("APPLICATION_NAME must be set"),
             app_base_url: env::var("APPLICATION_BASEURL").expect("APPLICATION_BASEURL must be set"),
             frontend_url: env::var("FRONTEND_URL").expect("FRONTEND_URL must be set"),
@@ -69,9 +60,16 @@ impl Config {
             vas_username: env::var("_9PSB_VAT_USERNAME").expect("_9PSB_VAT_USERNAME must be set"),
             vas_password: env::var("_9PSB_VAT_PASSWORD").expect("_9PSB_VAT_PASSWORD must be set"),
            
-           
             psb_webhook_username: env::var("_9PSB_WEBHOOK_USERNAME").expect("_9PSB_WEBHOOK_USERNAME must be set"),
             psb_webhook_password: env::var("_9PSB_WEBHOOK_PASSWORD").expect("_9PSB_WEBHOOK_PASSWORD must be set"),
+
+
+            // dojah credentials
+            dojah_pk: env::var("DOJAH_PK").expect("DOJAH_PK must be set"),
+            dojah_sk: env::var("DOJAH_SK").expect("DOJAH_SK must be set"),
+            dojah_app_id: env::var("DOJAH_APP_ID").expect("DOJAH_APP_ID must be set"),
+            dojah_webhook_url: env::var("DOJAH_WEBHOOK").expect("DOJAH_WEBHOOK must be set"),
+            
 
             db_host: env::var("POSTGRESQL_HOST").expect("POSTGRESQL_HOST must be set"),
             db_port: env::var("POSTGRESQL_PORT")

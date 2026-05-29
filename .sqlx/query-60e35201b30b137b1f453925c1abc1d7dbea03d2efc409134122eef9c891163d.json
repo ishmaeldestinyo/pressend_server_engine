@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id, firstname, lastname, othername, phone_number,\n                email, account_number, account_name, account_type, current_tier\n            FROM accounts\n            WHERE\n                deleted_at IS NULL\n                AND (\n                    -- Search by identifiers\n                    TRIM(account_number::TEXT) = $1\n                    OR TRIM(phone_number) = $1\n                    OR LOWER(TRIM(email)) = $1\n\n                    -- Search by the name part after '/'\n                    OR LOWER(SPLIT_PART(account_name, '/', 2)) LIKE $2\n                    \n                    -- Search the whole name (fallback for names without / or with spaces)\n                    OR LOWER(account_name) LIKE $2\n                    \n                    -- Individual name fields\n                    OR LOWER(firstname) LIKE $2\n                    OR LOWER(lastname) LIKE $2\n                )\n            LIMIT 11\n            ",
+  "query": "\n            SELECT\n                id, firstname, lastname, othername, phone_number,\n                email, account_number, account_name, account_type, current_tier\n            FROM accounts\n            WHERE\n                deleted_at IS NULL\n                AND (\n                    TRIM(account_number::TEXT) = $1\n                    OR TRIM(phone_number) = $1\n                    OR LOWER(TRIM(email)) = $1\n                    OR LOWER(SPLIT_PART(account_name, '/', 2)) LIKE $2\n                    OR LOWER(account_name) LIKE $2\n                    OR LOWER(firstname) LIKE $2\n                    OR LOWER(lastname) LIKE $2\n                )\n            LIMIT 11\n            ",
   "describe": {
     "columns": [
       {
@@ -73,5 +73,5 @@
       false
     ]
   },
-  "hash": "5f6becade32a9fc96f34c252c48eb002fea1d23315279ebee2730260d40304be"
+  "hash": "60e35201b30b137b1f453925c1abc1d7dbea03d2efc409134122eef9c891163d"
 }

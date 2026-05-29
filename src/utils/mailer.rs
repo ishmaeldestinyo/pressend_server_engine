@@ -19,7 +19,7 @@ pub fn get_templates() -> &'static Tera {
         );
         let tera = Tera::new(&pattern).expect("❌ Failed to load email templates");
         println!(
-            "📧 Loaded templates: {:?}",
+            "Loaded templates: {:?}",
             tera.get_template_names().collect::<Vec<_>>()
         );
         tera

@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            status,\n            email,\n            phone_number,\n            nin,\n            email_verified\n        FROM accounts\n        WHERE email = $1 OR phone_number = $2 OR nin = $3\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "phone_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "nin",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "email_verified",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "25895542a9b1807623b329edda9007b26dad75762ab098bf37948a7fbf847cb7"
+}

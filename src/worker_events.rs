@@ -8,7 +8,7 @@ pub struct SignupEvent {
     pub account_type: String,
     pub address: String,
     pub otp_redis_key: String,
-    // from Monnify NIN lookup
+    // from dojah NIN lookup
     pub nin: String,
     pub firstname: String,
     pub lastname: String,
@@ -16,6 +16,10 @@ pub struct SignupEvent {
     pub date_of_birth: String,
     pub gender: String,
     pub mobile_number: String,
+    pub city: String,
+    pub state: String,
+    pub lga: String,
+    pub user_photo: String,
 }
 
 
@@ -108,22 +112,17 @@ pub struct Tier2UpgradeEvent {
     pub phone_no: String,
     pub id_type: i32,
     pub id_number: String,
-    pub id_issue_date: String,
-    pub id_expiry_date: Option<String>,
     pub house_number: String,
     pub street_name: String,
     pub state: String,
     pub city: String,
     pub local_government: String,
     pub nearest_landmark: String,
-    pub place_of_birth: Option<String>,
     pub pep: String,
     pub user_photo: String,
     pub id_card_front: String,
-    pub id_card_back: Option<String>,
     pub customer_signature: String,
     pub utility_bill: String,
-    pub proof_of_address: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -140,6 +139,12 @@ pub struct SetPaymentPinEvent {
     pub account_id: String,
     pub email:      String,
     pub firstname:  String,
+}
+
+
+#[derive(Debug, Serialize)]
+pub struct DebitPalmCharge {
+    pub account_id: String,
 }
 
 

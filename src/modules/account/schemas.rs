@@ -41,12 +41,14 @@ impl Gender {
     }
 }
 
-
 #[derive(Debug)]
 #[derive(Deserialize, Serialize, Validate)]
 pub struct SignupRequest {
     #[validate(email(message = "Invalid email format"))]
     pub email: String,
+
+    #[validate(length(min = 11, max = 11, message = "Phone number must be exactly 11 characters"))]
+    pub phone_no: String,
 
     #[validate(length(
         min = 8,
@@ -61,14 +63,9 @@ pub struct SignupRequest {
 
     #[validate(length(min = 11, max = 11, message = "NIN must be exactly 11 characters"))]
     pub nin: String,
-
-    #[validate(length(
-        min = 1,
-        max = 100,
-        message = "Address is required and must not exceed 100 characters"
-    ))]
-    pub address: String,
 }
+
+
 
 #[derive(Deserialize, Serialize, Validate)]
 pub struct SendOTPRequest {
@@ -144,28 +141,7 @@ pub struct ResetPasswordSubmit {
 pub struct UpgradeTier2Request {
     // ── Optional overrides from tier 1 (in case they were wrong/rejected) ─────
     #[validate(length(min = 11, max = 11, message = "BVN must be 11 digits"))]
-    pub bvn: Option<String>,
-
-    #[validate(length(min = 11, max = 11, message = "NIN must be 11 digits"))]
-    pub nin: Option<String>,
-
-    #[validate(length(min = 11, max = 11, message = "Phone number must be 11 digits"))]
-    pub phone_no: Option<String>,
-
-    // ── New: ID details ───────────────────────────────────────────────────────
-    // 1=NationalID(NIN), 2=Driver's License, 3=Voter's Card, 4=International Passport
-    #[validate(range(min = 1, max = 4, message = "ID type must be 1, 2, 3 or 4"))]
-    pub id_type: i32,
-
-    #[validate(length(min = 1, message = "ID number is required"))]
-    pub id_number: String,
-
-    // Format: yyyy-MM-dd
-    #[validate(length(min = 10, max = 10, message = "ID issue date must be in yyyy-MM-dd format"))]
-    pub id_issue_date: String,
-
-    // Optional for NIN
-    pub id_expiry_date: Option<String>,
+    pub bvn: String,
 
     // ── New: Address breakdown ────────────────────────────────────────────────
     #[validate(length(min = 1, message = "House number is required"))]
@@ -186,20 +162,14 @@ pub struct UpgradeTier2Request {
     #[validate(length(min = 1, message = "Nearest landmark is required"))]
     pub nearest_landmark: String,
 
-    pub place_of_birth: Option<String>,
-
     // YES or NO
     #[validate(length(min = 2, max = 3, message = "PEP must be YES or NO"))]
     pub pep: String,
 
-    // ── New: Base64 images ────────────────────────────────────────────────────
-    #[validate(length(max = 5000000, message = "User photo is too large"))]
-    pub user_photo: String,
+    pub user_photo: Option<String>,
 
     #[validate(length(max = 5000000, message = "ID card front must not exceed 100000 characters"))]
     pub id_card_front: String,
-
-    pub id_card_back: Option<String>,
 
    #[validate(length(max = 5000000, message = "Signature is too large"))]
     pub customer_signature: String,
@@ -207,9 +177,10 @@ pub struct UpgradeTier2Request {
     #[validate(length(max = 5000000, message = "Utility bill is too large"))]
     pub utility_bill: String,
 
-    // Optional for tier 2
-    pub proof_of_address: Option<String>,
 }
+
+
+
 
 // ── Tier 3 — reuses ALL tier 2 fields from DB; only proof_of_address is new ───
 #[derive(Deserialize, Serialize, Validate)]
@@ -230,13 +201,6 @@ pub struct SearchAccountQuery {
     #[validate(length(min = 2, message = "Search query must be at least 2 characters"))]
     pub q: String,
 }
-
-#[derive(Deserialize, Serialize, Validate)]
-pub struct TogglePanicRequest {
-    pub enabled: bool,
-    pub message: Option<String>, // only needed when enabled = true
-}
-
 
 
 

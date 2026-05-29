@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO accounts (\n                    id, email, password_hash, device_id, account_type,\n                    firstname, lastname, othername, phone_number,\n                    date_of_birth, gender, nin, address,\n                    account_number, account_name, bank_name,\n                    city, lga, state, user_photo,\n                    current_tier, tier_upgraded_at,\n                    status, email_verified\n                )\n                VALUES (\n                    $1, $2, $3, $4, $5,\n                    $6, $7, $8, $9,\n                    $10, $11, $12, $13,\n                    $14, $15, $16,\n                    $17, $18, $19, $20,\n                    1, NOW(),\n                    'active', false\n                )\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "25729b60b97a4b64be0b3e30fb8d5f83b672856dd612bec6b0c16350c33d3d4d"
+}

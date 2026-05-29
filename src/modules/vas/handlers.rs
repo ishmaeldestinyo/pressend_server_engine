@@ -304,6 +304,9 @@ pub async fn airtime_purchase(
     })
 }
 
+
+
+
 pub async fn get_topup_status(
     query: web::Query<std::collections::HashMap<String, String>>,
     cfg: web::Data<Config>,
@@ -394,6 +397,8 @@ pub async fn get_topup_status(
         }
     }
 }
+
+
 
 pub async fn get_my_vas_transactions(
     auth: AuthUser,
@@ -589,6 +594,7 @@ pub async fn get_data_plans(
     }))
 }
 
+
 pub async fn data_purchase(
     auth: AuthUser,
     body: web::Json<schemas::DataPurchaseRequest>,
@@ -667,6 +673,10 @@ pub async fn data_purchase(
         status: ResponseStatus::SUCCESS,
     })
 }
+
+
+
+
 
 pub async fn get_bill_categories(
     cfg: web::Data<Config>,
@@ -782,6 +792,7 @@ pub async fn get_category_billers(
     }
 }
 
+
 pub async fn get_biller_fields(
     path: web::Path<String>,
     cfg: web::Data<Config>,
@@ -840,6 +851,8 @@ pub async fn get_biller_fields(
         }
     }
 }
+
+
 
 pub async fn get_cabletv_fields(
     cfg: web::Data<Config>,
@@ -905,6 +918,9 @@ pub async fn get_cabletv_fields(
         "data": results
     }))
 }
+
+
+
 
 pub async fn validate_biller(
     body: web::Json<schemas::ValidateBillerRequest>,
@@ -1013,6 +1029,8 @@ pub async fn validate_biller(
         }
     }
 }
+
+
 
 pub async fn bills_payment(
     auth: AuthUser,

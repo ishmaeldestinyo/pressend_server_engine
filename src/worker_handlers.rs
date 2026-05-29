@@ -33,13 +33,10 @@ pub async fn handle_signup(
 ) {
     let event: SignupEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
-        Err(e) => {
-            println!("[worker/signup] Invalid payload: {}", e);
+        Err(_e) => {
             return;
         }
     };
-
-    println!("[worker/signup] Processing: {}", event.email);
 
     // ── 1. Check if email already exists ─────────────────────────────────────
     let existing = sqlx::query!(
@@ -52,16 +49,9 @@ pub async fn handle_signup(
     match existing {
         Ok(Some(row)) => {
             if row.email_verified {
-                println!(
-                    "[worker/signup] Email already verified, rejecting: {}",
-                    event.email
-                );
+              
                 return;
             }
-            println!(
-                "[worker/signup] Email exists but unverified, resending OTP: {}",
-                event.email
-            );
         }
         Err(e) => {
             println!("[worker/signup] DB check error: {}", e);
@@ -166,6 +156,7 @@ pub async fn handle_signup(
                     firstname, lastname, othername, phone_number,
                     date_of_birth, gender, nin, address,
                     account_number, account_name, bank_name,
+                    city, lga, state, user_photo,
                     current_tier, tier_upgraded_at,
                     status, email_verified
                 )
@@ -174,6 +165,7 @@ pub async fn handle_signup(
                     $6, $7, $8, $9,
                     $10, $11, $12, $13,
                     $14, $15, $16,
+                    $17, $18, $19, $20,
                     1, NOW(),
                     'active', false
                 )
@@ -194,6 +186,10 @@ pub async fn handle_signup(
                 account_number,
                 account_name,
                 "9PSB",
+                event.city,
+                event.lga,
+                event.state,
+                event.user_photo,
             )
             .execute(db)
             .await;
@@ -831,10 +827,7 @@ pub async fn handle_tier2_upgrade(
         "userPhoto": event.user_photo,
         "idType": event.id_type.to_string(),
         "idNumber": event.id_number,
-        "idIssueDate": event.id_issue_date,
-        "idExpiryDate": event.id_expiry_date,
         "idCardFront": event.id_card_front,
-        "idCardBack": event.id_card_back,
         "houseNumber": event.house_number,
         "streetName": event.street_name,
         "state": event.state,
@@ -844,8 +837,6 @@ pub async fn handle_tier2_upgrade(
         "customerSignature": event.customer_signature,
         "utilityBill": event.utility_bill,
         "nearestLandmark": event.nearest_landmark,
-        "placeOfBirth": event.place_of_birth,
-        "proofOfAddressVerification": event.proof_of_address,
     });
 
     match psb
@@ -1651,7 +1642,7 @@ pub async fn handle_transfer_inflow(
                 "totalAmount":   "1",
                 "transactionId": fee_ref,
                 "merchant": {
-                    "isFee":              false,
+                    "isFee":              true,
                     "merchantFeeAccount": &cfg._9psb_operational_account,
                     "merchantFeeAmount":  "34"
                 }
@@ -2374,3 +2365,5 @@ pub async fn handle_data_purchase(
         }
     }
 }
+
+
