@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) FROM referrals\n        WHERE referrer_id = $1\n          AND status      = 'qualified'\n          AND rewarded    = false\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3a38f4b4d160ec8ce2aa4ee1d15c5a046d3bed1c8c46f14eaf6fa794110664a2"
+}

@@ -61,8 +61,9 @@ pub struct SignupRequest {
     #[validate(custom(function = "validate_password"))]
     pub password: String,
 
-    #[validate(length(min = 11, max = 11, message = "NIN must be exactly 11 characters"))]
-    pub nin: String,
+    pub reference: String, // nin reference
+
+    pub referral_code: Option<String>,
 }
 
 
@@ -136,14 +137,11 @@ pub struct ResetPasswordSubmit {
 }
 
 
-// ── Tier 2 — reuses bvn, nin, phone_no from DB; only asks for new fields ──────
 #[derive(Deserialize, Serialize, Validate)]
 pub struct UpgradeTier2Request {
-    // ── Optional overrides from tier 1 (in case they were wrong/rejected) ─────
-    #[validate(length(min = 11, max = 11, message = "BVN must be 11 digits"))]
-    pub bvn: String,
+    #[validate(length(min = 4, message = "Reference is required and must be at least 4 characters"))]
+    pub reference: String,
 
-    // ── New: Address breakdown ────────────────────────────────────────────────
     #[validate(length(min = 1, message = "House number is required"))]
     pub house_number: String,
 
@@ -162,24 +160,18 @@ pub struct UpgradeTier2Request {
     #[validate(length(min = 1, message = "Nearest landmark is required"))]
     pub nearest_landmark: String,
 
-    // YES or NO
     #[validate(length(min = 2, max = 3, message = "PEP must be YES or NO"))]
     pub pep: String,
 
-    pub user_photo: Option<String>,
-
-    #[validate(length(max = 5000000, message = "ID card front must not exceed 100000 characters"))]
+    #[validate(length(max = 5000000, message = "ID card front must not exceed 5000000 characters"))]
     pub id_card_front: String,
 
-   #[validate(length(max = 5000000, message = "Signature is too large"))]
+    #[validate(length(max = 5000000, message = "Signature is too large"))]
     pub customer_signature: String,
 
     #[validate(length(max = 5000000, message = "Utility bill is too large"))]
     pub utility_bill: String,
-
 }
-
-
 
 
 // ── Tier 3 — reuses ALL tier 2 fields from DB; only proof_of_address is new ───

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE referrals\n        SET\n            status     = CASE\n                             WHEN status = 'palm_done' THEN 'qualified'\n                             WHEN status = 'pending'   THEN 'disqualified'\n                             ELSE status\n                         END,\n            vas_payment_at = CASE\n                                 WHEN status = 'palm_done' AND vas_payment_at IS NULL THEN NOW()\n                                 ELSE vas_payment_at\n                             END,\n            qualified_at = CASE\n                               WHEN status = 'palm_done' AND vas_payment_at IS NULL THEN NOW()\n                               ELSE qualified_at\n                           END,\n            disqualified_reason = CASE\n                                      WHEN status = 'pending' THEN 'vas_before_palm'\n                                      ELSE disqualified_reason\n                                  END,\n            updated_at = NOW()\n        WHERE referred_id = $1\n          AND status NOT IN ('disqualified', 'qualified')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "adcaeb5fb41e72451bbeb438b2fd0f2099db1b7c881a2afd360c217ff0146e5b"
+}

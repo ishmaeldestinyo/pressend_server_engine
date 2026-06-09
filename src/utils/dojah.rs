@@ -94,6 +94,8 @@ pub struct NinAdvanceEntity {
     pub tax_residency: Option<String>,
 }
 
+
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NinAdvanceResponse {
     pub entity: NinAdvanceEntity,

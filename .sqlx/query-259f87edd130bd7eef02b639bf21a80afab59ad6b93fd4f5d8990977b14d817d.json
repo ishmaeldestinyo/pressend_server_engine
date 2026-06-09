@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at\n               FROM accounts WHERE id = $1",
+  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at, referral_code\n               FROM accounts WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -142,6 +142,11 @@
         "ordinal": 27,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 28,
+        "name": "referral_code",
+        "type_info": "Varchar"
       }
     ],
     "parameters": {
@@ -177,8 +182,9 @@
       true,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "6540f91e9c3fe38ae3690bf8c14b9b0570451253fb8c1a144585e2e158794d1e"
+  "hash": "259f87edd130bd7eef02b639bf21a80afab59ad6b93fd4f5d8990977b14d817d"
 }

@@ -1,5 +1,6 @@
 use crate::modules::vas::events::DataPurchaseEvent;
 use crate::utils::fms::send_push_notification;
+use crate::worker_handlers::advance_referral_vas;
 use crate::{
     config::{Config, KafkaConfig},
     kafka::KafkaProducer,
@@ -1190,6 +1191,14 @@ pub async fn bills_payment(
     .await
     {
         log::error!("[bills_payment] DB insert error: {}", e);
+    }
+
+    // ── Referral: advance VAS milestone ──────────────────────────────────────────
+    if tx_status == "success" {
+        let db_ref = db.clone();
+        tokio::spawn(async move {
+            advance_referral_vas(&db_ref, account_uuid).await;
+        });
     }
 
     // ── 9. Push notification ──────────────────────────────────────────────────

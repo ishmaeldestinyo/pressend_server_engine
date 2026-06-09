@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            rr.id            AS reward_id,\n            rr.referrer_id,\n            rr.amount,\n            a.account_number,\n            a.account_name,\n            a.device_token,\n            a.firstname\n        FROM referral_rewards rr\n        JOIN accounts a ON a.id = rr.referrer_id\n        WHERE rr.status    = 'pending'\n          AND a.deleted_at IS NULL\n        FOR UPDATE OF rr SKIP LOCKED\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reward_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "referrer_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "amount",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 3,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "device_token",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "firstname",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "41b81663cbf4accaa1069771aae40f4f90d34e46c6e7dfa8f2a8797c0bd861b0"
+}

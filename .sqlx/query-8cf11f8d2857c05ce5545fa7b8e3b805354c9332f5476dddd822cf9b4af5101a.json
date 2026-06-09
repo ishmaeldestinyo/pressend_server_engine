@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO referral_rewards (referrer_id, amount, currency, referral_count, status)\n        VALUES ($1, 1000, 'NGN', 5, 'pending')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8cf11f8d2857c05ce5545fa7b8e3b805354c9332f5476dddd822cf9b4af5101a"
+}

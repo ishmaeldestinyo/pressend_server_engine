@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::modules::legacy_plan::events::{
     LegacyPlanBeneficiaryAddedEvent, LegacyPlanBeneficiaryDeletedEvent,
 };
+use base64::Engine;
 use crate::modules::transactions::event::{
     ExternalTransferInitiatedEvent, InternalTransferInitiatedEvent,
 };
@@ -17,12 +18,14 @@ use crate::worker_events::{
     SetPaymentPinEvent, SignupEvent, SuspiciousLoginEvent, Tier2UpgradeEvent, Tier3UpgradeEvent,
     UpdateDeviceIdEvent, VerifyEmailEvent,
 };
-use rand::Rng;
+use rand::{Rng, distributions::Alphanumeric};
 use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::str::FromStr;
 use uuid::Uuid;
+
+
 
 pub async fn handle_signup(
     payload: &str,
@@ -38,6 +41,15 @@ pub async fn handle_signup(
         }
     };
 
+    let random_str: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect::<String>()
+        .to_uppercase();
+
+    let referral_code = format!("PRS-{}", random_str);
+
     // ── 1. Check if email already exists ─────────────────────────────────────
     let existing = sqlx::query!(
         "SELECT id, email_verified FROM accounts WHERE email = $1",
@@ -46,12 +58,17 @@ pub async fn handle_signup(
     .fetch_optional(db)
     .await;
 
+    // account_id is set in one of two ways below and used for the referral insert
+    let account_id: Uuid;
+
     match existing {
         Ok(Some(row)) => {
             if row.email_verified {
-              
                 return;
             }
+            // Account exists but not verified — skip re-creating it,
+            // but still need the real id for the referral insert below
+            account_id = row.id;
         }
         Err(e) => {
             println!("[worker/signup] DB check error: {}", e);
@@ -68,6 +85,7 @@ pub async fn handle_signup(
             };
 
             // ── 3. Open 9PSB wallet BEFORE insert ────────────────────────────
+            // Declared here — never Uuid::nil(), always a real UUID
             let new_id = Uuid::new_v4();
 
             let gender_code = match event.gender.to_uppercase().as_str() {
@@ -158,7 +176,8 @@ pub async fn handle_signup(
                     account_number, account_name, bank_name,
                     city, lga, state, user_photo,
                     current_tier, tier_upgraded_at,
-                    status, email_verified
+                    status, email_verified, referral_code,
+                    referred_by
                 )
                 VALUES (
                     $1, $2, $3, $4, $5,
@@ -167,8 +186,10 @@ pub async fn handle_signup(
                     $14, $15, $16,
                     $17, $18, $19, $20,
                     1, NOW(),
-                    'active', false
+                    'active', false, $21, $22
                 )
+                ON CONFLICT (email) DO NOTHING
+                RETURNING id
                 "#,
                 new_id,
                 event.email,
@@ -190,23 +211,76 @@ pub async fn handle_signup(
                 event.lga,
                 event.state,
                 event.user_photo,
+                referral_code,
+                event.referrer_id.as_deref()
+                    .and_then(|s| Uuid::parse_str(s).ok()),
             )
-            .execute(db)
+            .fetch_optional(db)
             .await;
 
-            if let Err(e) = result {
-                println!("[worker/signup] DB insert error: {}", e);
-                return;
+            match result {
+                Ok(Some(row)) => {
+                    // freshly inserted — use the returned id
+                    account_id = row.id;
+                    println!(
+                        "[worker/signup] Account created with wallet — email: {}, account_number: {}",
+                        event.email, account_number
+                    );
+                }
+                Ok(None) => {
+                    // ON CONFLICT DO NOTHING fired — row already existed,
+                    // fetch its real id so the referral insert below is correct
+                    match sqlx::query_scalar!(
+                        "SELECT id FROM accounts WHERE email = $1",
+                        event.email
+                    )
+                    .fetch_one(db)
+                    .await
+                    {
+                        Ok(id) => {
+                            account_id = id;
+                        }
+                        Err(e) => {
+                            eprintln!("[worker/signup] failed to fetch existing account id: {}", e);
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[worker/signup] DB insert error: {}", e);
+                    return;
+                }
             }
-
-            println!(
-                "[worker/signup] Account created with wallet — email: {}, account_number: {}",
-                event.email, account_number
-            );
         }
     };
 
-    // ── 5. Generate + hash OTP ────────────────────────────────────────────────
+    // ── 5. Insert referral row if referred ───────────────────────────────────
+    // account_id is always a real UUID here — never Uuid::nil()
+    if let Some(referrer_id_str) = &event.referrer_id {
+        if let Ok(referrer_uuid) = Uuid::parse_str(referrer_id_str) {
+            if let Err(e) = sqlx::query!(
+                r#"
+                INSERT INTO referrals (referrer_id, referred_id, status)
+                VALUES ($1, $2, 'pending')
+                ON CONFLICT (referred_id) DO NOTHING
+                "#,
+                referrer_uuid,
+                account_id,  // ← always the real id, never nil
+            )
+            .execute(db)
+            .await
+            {
+                eprintln!("[worker/signup] referral insert error: {}", e);
+            } else {
+                eprintln!(
+                    "[worker/signup] referral recorded — referrer: {}, referred: {}",
+                    referrer_uuid, account_id
+                );
+            }
+        }
+    }
+
+    // ── 6. Generate + hash OTP ────────────────────────────────────────────────
     let otp = generate_otp();
 
     let otp_hash = match hash_password(&otp) {
@@ -217,7 +291,7 @@ pub async fn handle_signup(
         }
     };
 
-    // ── 6. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
+    // ── 7. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
     let mut redis_conn = redis.clone();
     match redis::cmd("SETEX")
         .arg(&event.otp_redis_key)
@@ -226,16 +300,21 @@ pub async fn handle_signup(
         .query_async::<_, ()>(&mut redis_conn)
         .await
     {
-        Ok(_) => println!("[worker/signup] OTP stored: {}", event.otp_redis_key),
-        Err(e) => println!("[worker/signup] Redis store error: {}", e),
+        Ok(_) => {
+            println!("[worker/signup] OTP stored in Redis: {}", event.otp_redis_key);
+        }
+        Err(e) => {
+            println!("[worker/signup] Redis OTP save failed: {}", e);
+            return;
+        }
     }
 
-    // ── 7. Send plain OTP in email ────────────────────────────────────────────
-    if let Err(e) = mailer.send_otp(&event.email, "", &otp).await {
-        println!("[worker/signup] OTP email error: {}", e);
+    // ── 8. Send OTP email ─────────────────────────────────────────────────────
+    if let Err(e) = mailer.send_otp(&event.email, &event.firstname, &otp).await {
+        println!("[worker/signup] OTP email send failed: {}", e);
+    } else {
+        println!("[worker/signup] OTP email sent to: {}", event.email);
     }
-
-    println!("[worker/signup] Done: {}", event.email);
 }
 
 
@@ -286,6 +365,170 @@ pub async fn handle_resend_otp(
 
     println!("[worker/resend_otp] OTP resent: {}", event.email);
 }
+
+
+pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
+    let result = sqlx::query!(
+        r#"
+        UPDATE referrals
+        SET
+            status     = CASE
+                             WHEN status = 'palm_done' THEN 'qualified'
+                             WHEN status = 'pending'   THEN 'disqualified'
+                             ELSE status
+                         END,
+            vas_payment_at = CASE
+                                 WHEN status = 'palm_done' AND vas_payment_at IS NULL THEN NOW()
+                                 ELSE vas_payment_at
+                             END,
+            qualified_at = CASE
+                               WHEN status = 'palm_done' AND vas_payment_at IS NULL THEN NOW()
+                               ELSE qualified_at
+                           END,
+            disqualified_reason = CASE
+                                      WHEN status = 'pending' THEN 'vas_before_palm'
+                                      ELSE disqualified_reason
+                                  END,
+            updated_at = NOW()
+        WHERE referred_id = $1
+          AND status NOT IN ('disqualified', 'qualified')
+        "#,
+        account_uuid
+    )
+    .execute(db)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            // check if they just qualified (not disqualified)
+            let status = sqlx::query_scalar!(
+                "SELECT status FROM referrals WHERE referred_id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+
+            if status.as_deref() == Some("qualified") {
+                log::info!("[referral] qualified — referred_id={}", account_uuid);
+                check_and_create_reward(db, account_uuid).await;
+            } else {
+                log::warn!(
+                    "[referral] disqualified (vas before palm) — referred_id={}",
+                    account_uuid
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => log::error!("[referral] vas upsert failed for referred_id={}: {}", account_uuid, e),
+    }
+}
+
+
+
+async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
+    // Get this user's referrer
+    let referrer_id = match sqlx::query_scalar!(
+        "SELECT referrer_id FROM referrals WHERE referred_id = $1",
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
+    {
+        Ok(Some(id)) => id,
+        _ => return,
+    };
+
+    // Count unrewarded qualified referrals in batches of 5
+    let count = match sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*) FROM referrals
+        WHERE referrer_id = $1
+          AND status      = 'qualified'
+          AND rewarded    = false
+        "#,
+        referrer_id
+    )
+    .fetch_one(db)
+    .await
+    {
+        Ok(Some(n)) => n,
+        _ => return,
+    };
+
+    if count < 5 {
+        return;
+    }
+
+    // Mark exactly 5 as rewarded and insert reward row atomically
+    let mut tx = match db.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("[referral] failed to begin reward tx: {}", e);
+            return;
+        }
+    };
+
+    // Lock and mark exactly 5 rows
+    let marked = sqlx::query!(
+        r#"
+        UPDATE referrals
+        SET rewarded    = true,
+            rewarded_at = NOW(),
+            updated_at  = NOW()
+        WHERE id IN (
+            SELECT id FROM referrals
+            WHERE referrer_id = $1
+              AND status      = 'qualified'
+              AND rewarded    = false
+            ORDER BY qualified_at ASC
+            LIMIT 5
+            FOR UPDATE SKIP LOCKED
+        )
+        "#,
+        referrer_id
+    )
+    .execute(&mut *tx)
+    .await;
+
+    match marked {
+        Ok(r) if r.rows_affected() == 5 => {}
+        Ok(r) => {
+            // Race — another worker got some of them, abort
+            log::warn!("[referral] reward race detected — rows_affected={}, rolling back", r.rows_affected());
+            let _ = tx.rollback().await;
+            return;
+        }
+        Err(e) => {
+            log::error!("[referral] reward mark failed: {}", e);
+            let _ = tx.rollback().await;
+            return;
+        }
+    }
+
+    // Insert reward row
+    if let Err(e) = sqlx::query!(
+        r#"
+        INSERT INTO referral_rewards (referrer_id, amount, currency, referral_count, status)
+        VALUES ($1, 1000, 'NGN', 5, 'pending')
+        "#,
+        referrer_id
+    )
+    .execute(&mut *tx)
+    .await
+    {
+        log::error!("[referral] reward insert failed: {}", e);
+        let _ = tx.rollback().await;
+        return;
+    }
+
+    match tx.commit().await {
+        Ok(_) => log::info!("[referral] ₦1000 reward queued for referrer={}", referrer_id),
+        Err(e) => log::error!("[referral] reward commit failed: {}", e),
+    }
+}
+
 
 pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
     let event: VerifyEmailEvent = match serde_json::from_str(payload) {
@@ -706,6 +949,7 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
     }
 }
 
+
 pub async fn handle_tier2_upgrade(
     payload: &str,
     db: &PgPool,
@@ -715,7 +959,7 @@ pub async fn handle_tier2_upgrade(
     let event: Tier2UpgradeEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
-            println!("[worker/tier2_upgrade] Invalid payload: {}", e);
+            eprintln!("[worker/tier2_upgrade] Invalid payload: {}", e);
             return;
         }
     };
@@ -723,63 +967,47 @@ pub async fn handle_tier2_upgrade(
     let account_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
         Err(_) => {
-            println!("[worker/tier2_upgrade] Invalid account_id");
+            eprintln!("[worker/tier2_upgrade] Invalid account_id");
             return;
         }
     };
 
     // ── Fetch account ─────────────────────────────────────────────────────────
-    let account = sqlx::query!(
+    let row = match sqlx::query!(
         "SELECT current_tier, status, pending_tier_upgrade, email, account_number, account_name FROM accounts WHERE id = $1 AND deleted_at IS NULL",
         account_uuid
     )
     .fetch_optional(db)
-    .await;
-
-    let row = match account {
+    .await
+    {
         Ok(Some(r)) => r,
         Ok(None) => {
-            println!(
-                "[worker/tier2_upgrade] Account not found: {}",
-                event.account_id
-            );
+            eprintln!("[worker/tier2_upgrade] Account not found: {}", event.account_id);
             return;
         }
         Err(e) => {
-            println!("[worker/tier2_upgrade] DB error: {}", e);
+            eprintln!("[worker/tier2_upgrade] DB error: {}", e);
             return;
         }
     };
 
     if row.status != "active" {
-        println!(
-            "[worker/tier2_upgrade] Account not active: {}",
-            event.account_id
-        );
+        eprintln!("[worker/tier2_upgrade] Account not active: {}", event.account_id);
         return;
     }
 
     if row.current_tier < 1 {
-        println!(
-            "[worker/tier2_upgrade] Must be tier 1 before upgrading to tier 2: {}",
-            event.account_id
-        );
+        eprintln!("[worker/tier2_upgrade] Must be tier 1 before upgrading to tier 2: {}", event.account_id);
         return;
     }
 
     if row.current_tier >= 2 {
-        println!(
-            "[worker/tier2_upgrade] Already tier 2+: {}",
-            event.account_id
-        );
+        eprintln!("[worker/tier2_upgrade] Already tier 2+: {}", event.account_id);
         return;
     }
 
     if row.pending_tier_upgrade.is_some() {
-        println!(
-            "[worker/tier2_upgrade] Upgrade already in progress: {}",
-            event.account_id
-        );
+        eprintln!("[worker/tier2_upgrade] Upgrade already in progress: {}", event.account_id);
         return;
     }
 
@@ -787,15 +1015,37 @@ pub async fn handle_tier2_upgrade(
     let account_number = match row.account_number.clone() {
         Some(n) => n,
         None => {
-            println!(
-                "[worker/tier2_upgrade] No account number — must complete tier 1 first: {}",
-                event.account_id
-            );
+            eprintln!("[worker/tier2_upgrade] No account number — must complete tier 1 first: {}", event.account_id);
             return;
         }
     };
 
     let account_name = row.account_name.clone().unwrap_or_default();
+
+    // ── Resolve userPhoto — fetch URL and convert to base64 if needed ─────────
+    let user_photo_base64 = if event.user_photo.starts_with("http") {
+        eprintln!("[worker/tier2_upgrade] userPhoto is a URL, fetching and converting to base64...");
+        match reqwest::get(&event.user_photo).await {
+            Ok(resp) => match resp.bytes().await {
+                Ok(bytes) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    eprintln!("[worker/tier2_upgrade] userPhoto converted, base64 len: {}", b64.len());
+                    b64
+                }
+                Err(e) => {
+                    eprintln!("[worker/tier2_upgrade] Failed to read userPhoto bytes: {}", e);
+                    event.user_photo.clone()
+                }
+            },
+            Err(e) => {
+                eprintln!("[worker/tier2_upgrade] Failed to fetch userPhoto URL: {}", e);
+                event.user_photo.clone()
+            }
+        }
+    } else {
+        // Already base64
+        event.user_photo.clone()
+    };
 
     // ── Set pending ───────────────────────────────────────────────────────────
     if let Err(e) = sqlx::query!(
@@ -809,7 +1059,7 @@ pub async fn handle_tier2_upgrade(
     .execute(db)
     .await
     {
-        println!("[worker/tier2_upgrade] Failed to set pending: {}", e);
+        eprintln!("[worker/tier2_upgrade] Failed to set pending: {}", e);
         return;
     }
 
@@ -824,7 +1074,7 @@ pub async fn handle_tier2_upgrade(
         "phoneNumber": event.phone_no,
         "tier": "2",
         "email": row.email,
-        "userPhoto": event.user_photo,
+        "userPhoto": user_photo_base64,
         "idType": event.id_type.to_string(),
         "idNumber": event.id_number,
         "idCardFront": event.id_card_front,
@@ -839,23 +1089,46 @@ pub async fn handle_tier2_upgrade(
         "nearestLandmark": event.nearest_landmark,
     });
 
+    // ── Log all fields before sending ─────────────────────────────────────────
+    eprintln!("[worker/tier2_upgrade] ── outgoing payload ──────────────────");
+    eprintln!("  accountNumber:          {}", account_number);
+    eprintln!("  bvn:                    {}", event.bvn);
+    eprintln!("  nin:                    {}", event.nin);
+    eprintln!("  accountName:            {}", account_name);
+    eprintln!("  phoneNumber:            {}", event.phone_no);
+    eprintln!("  email:                  {}", row.email);
+    eprintln!("  idType:                 {}", event.id_type);
+    eprintln!("  idNumber:               {}", event.id_number);
+    eprintln!("  pep:                    {}", event.pep);
+    eprintln!("  houseNumber:            {}", event.house_number);
+    eprintln!("  streetName:             {}", event.street_name);
+    eprintln!("  state:                  {}", event.state);
+    eprintln!("  city:                   {}", event.city);
+    eprintln!("  localGovernment:        {}", event.local_government);
+    eprintln!("  nearestLandmark:        {}", event.nearest_landmark);
+    eprintln!("  userPhoto len:          {}", user_photo_base64.len());
+    eprintln!("  idCardFront len:        {}", event.id_card_front.len());
+    eprintln!("  customerSignature len:  {}", event.customer_signature.len());
+    eprintln!("  utilityBill len:        {}", event.utility_bill.len());
+    eprintln!("[worker/tier2_upgrade] ─────────────────────────────────────");
+
     match psb
         .post(redis, "/waas/api/v1/wallet_upgrade", &upgrade_body)
         .await
     {
         Ok(json) => {
-            println!("[worker/tier2_upgrade] wallet_upgrade response: {:?}", json);
+            eprintln!("[worker/tier2_upgrade] wallet_upgrade response: {:?}", json);
 
             let is_success =
                 json["status"].as_str().map(|s| s.to_uppercase()) == Some("SUCCESS".to_string());
 
             if is_success {
-                println!(
+                eprintln!(
                     "[worker/tier2_upgrade] Submitted successfully, awaiting webhook: {}",
                     row.email
                 );
             } else {
-                println!("[worker/tier2_upgrade] wallet_upgrade rejected: {:?}", json);
+                eprintln!("[worker/tier2_upgrade] wallet_upgrade rejected: {:?}", json);
                 // clear pending so user can retry
                 let _ = sqlx::query!(
                     "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
@@ -866,11 +1139,12 @@ pub async fn handle_tier2_upgrade(
             }
         }
         Err(e) => {
-            println!("[worker/tier2_upgrade] wallet_upgrade error: {}", e);
+            eprintln!("[worker/tier2_upgrade] wallet_upgrade error: {}", e);
             // keep pending — allow retry via Kafka
         }
     }
 }
+
 
 pub async fn handle_tier3_upgrade(
     payload: &str,
@@ -2060,6 +2334,15 @@ pub async fn handle_airtime_purchase(
             .await
             .map_err(|e| println!("[worker/airtime_purchase] DB insert error: {}", e));
 
+
+            // ── Referral: advance VAS milestone ──────────────────────────────────────────
+            if tx_status == "success" {
+                let db_clone = db.clone();
+                tokio::spawn(async move {
+                    advance_referral_vas(&db_clone, account_uuid).await;
+                });
+            }
+
             // ── Push notification ─────────────────────────────────────────────
             let token = sqlx::query_scalar!(
                 "SELECT device_token FROM accounts WHERE id = $1",
@@ -2253,6 +2536,14 @@ pub async fn handle_data_purchase(
             .await
             .map_err(|e| println!("[worker/data_purchase] DB insert error: {}", e));
 
+            
+            // ── Referral: advance VAS milestone ──────────────────────────────────────────
+            if tx_status == "success" {
+                let db_clone = db.clone();
+                tokio::spawn(async move {
+                    advance_referral_vas(&db_clone, account_uuid).await;
+                });
+            }
             // ── Push notification ─────────────────────────────────────────────
             let token = sqlx::query_scalar!(
                 "SELECT device_token FROM accounts WHERE id = $1",

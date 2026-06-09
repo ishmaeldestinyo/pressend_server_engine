@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE referrals\n        SET rewarded    = true,\n            rewarded_at = NOW(),\n            updated_at  = NOW()\n        WHERE id IN (\n            SELECT id FROM referrals\n            WHERE referrer_id = $1\n              AND status      = 'qualified'\n              AND rewarded    = false\n            ORDER BY qualified_at ASC\n            LIMIT 5\n            FOR UPDATE SKIP LOCKED\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0719c91b49a32e95c66b648f25f2f204847107a82e64ed4de0863f86ab5a9963"
+}

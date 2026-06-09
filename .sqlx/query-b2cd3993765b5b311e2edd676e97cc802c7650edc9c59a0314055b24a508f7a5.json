@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO referrals (referrer_id, referred_id, status)\n                VALUES ($1, $2, 'pending')\n                ON CONFLICT (referred_id) DO NOTHING\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2cd3993765b5b311e2edd676e97cc802c7650edc9c59a0314055b24a508f7a5"
+}

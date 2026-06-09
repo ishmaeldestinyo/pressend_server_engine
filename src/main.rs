@@ -5,6 +5,7 @@ use blinq_server::utils::psb::PsbClient;
 use blinq_server::utils::dojah::{Config as DojahConfig, DojahClient};
 use blinq_server::{config, db, kafka, modules, redis};
 use blinq_server::middlewares::governors::{strict_governor, mutating_governor};
+use blinq_server::cron::pay_referral_executor::run_referral_reward_payout;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -64,7 +65,23 @@ async fn main() -> std::io::Result<()> {
     let psb = web::Data::new(PsbClient::new(&cfg));
     let dojah = web::Data::new(DojahClient::new(DojahConfig::new(&cfg.dojah_app_id, &cfg.dojah_sk)));
 
-    println!("Blinq Server running on port {}", PORT);
+    // ── Referral reward payout cron — every 60 seconds ───────────────────────
+    {
+        let cron_db  = db_pool.get_ref().clone();
+        let cron_cfg = cfg.get_ref().clone();
+        let cron_redis = redis_data.get_ref().clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            let mut redis_conn = cron_redis;
+            loop {
+                interval.tick().await;
+                run_referral_reward_payout(&cron_db, &cron_cfg, &mut redis_conn).await;
+            }
+        });
+    }
+
+    println!("Pressend Server running on port {}", PORT);
 
     HttpServer::new(move || {
         App::new()

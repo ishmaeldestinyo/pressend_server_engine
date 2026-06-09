@@ -25,24 +25,230 @@ use crate::worker_events::{
     UpdateDeviceIdEvent,
     VerifyEmailEvent,
 };
+use sqlx::types::BigDecimal;
+use std::str::FromStr;
 use crate::worker_handlers::generate_otp;
 use actix_web::HttpRequest;
 use actix_web::{ HttpResponse, Responder, web };
 use sqlx::PgPool;
 use uuid::Uuid;
 use validator::Validate;
-use crate::utils::dojah::{DojahClient, BvnSelfieRequest};
+use serde_json::Value;
+
+
+pub async fn dojah_webhook(
+    body: web::Json<Value>,
+    db: web::Data<PgPool>,
+) -> impl Responder {
+    println!("DOJAH WEBHOOK BODY: {:#?}", body);
+
+    let body = body.into_inner();
+
+    let verification_status = body["verification_status"].as_str().unwrap_or("");
+    if verification_status != "Completed" {
+        return HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Acknowledged"
+        }));
+    }
+
+    let reference_id = match body["reference_id"].as_str() {
+        Some(r) => r.to_string(),
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Missing reference_id"
+            }));
+        }
+    };
+
+    let widget_id         = body["widget_id"].as_str().map(str::to_string);
+    let id_type           = body["id_type"].as_str().unwrap_or("").to_string();
+    let verification_type = body["verification_type"].as_str().unwrap_or("").to_string();
+    let verification_mode = body["verification_mode"].as_str().unwrap_or("").to_string();
+    let verification_url  = body["verification_url"].as_str().map(str::to_string);
+    let value             = body["value"].as_str().map(str::to_string);
+    let status            = body["status"].as_bool().unwrap_or(false);
+    let aml_status        = body["aml"]["status"].as_bool().unwrap_or(false);
+    let message           = body["message"].as_str().map(str::to_string);
+    let selfie_url        = body["selfie_url"].as_str().map(str::to_string);
+    let device_info       = body["metadata"]["device_info"].as_str().map(str::to_string);
+    let ip_info           = body["metadata"]["ipinfo"].clone();
+
+    let liveness_score = body["data"]["selfie"]["data"]["liveness_score"]
+        .as_f64()
+        .and_then(|v| BigDecimal::from_str(&v.to_string()).ok());
+
+    let match_score = body["data"]["selfie"]["data"]["match_score"]
+        .as_f64()
+        .and_then(|v| BigDecimal::from_str(&v.to_string()).ok());
+
+    let verified_at = if status { Some(chrono::Utc::now()) } else { None };
+
+    let kyc_id: Uuid = match sqlx::query_scalar!(
+        r#"
+        INSERT INTO kyc_verifications (
+            reference_id, widget_id,
+            id_type, verification_type, verification_mode,
+            verification_status, verification_url, value,
+            status, aml_status, message,
+            selfie_url, liveness_score, match_score,
+            device_info, ip_info, raw_payload, verified_at
+        )
+        VALUES (
+            $1, $2,
+            $3, $4, $5,
+            $6, $7, $8,
+            $9, $10, $11,
+            $12, $13, $14,
+            $15, $16, $17, $18
+        )
+        ON CONFLICT (reference_id) DO NOTHING
+        RETURNING id
+        "#,
+        reference_id,
+        widget_id,
+        id_type,
+        verification_type,
+        verification_mode,
+        verification_status,
+        verification_url,
+        value,
+        status,
+        aml_status,
+        message,
+        selfie_url,
+        liveness_score,
+        match_score,
+        device_info,
+        ip_info,
+        body,
+        verified_at
+    )
+    .fetch_optional(db.get_ref())
+    .await
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return HttpResponse::Ok().json(serde_json::json!({
+                "status": "success",
+                "message": "Already processed"
+            }));
+        }
+        Err(e) => {
+            eprintln!("[dojah_webhook] DB insert error: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Failed to store verification"
+            }));
+        }
+    };
+
+    match id_type.to_uppercase().as_str() {
+        "NIN" => {
+            let entity = &body["data"]["government_data"]["data"]["nin"]["entity"];
+
+            let nin          = entity["nin"].as_str().unwrap_or("").to_string();
+            let first_name   = entity["first_name"].as_str().map(str::to_string);
+            let middle_name  = entity["middle_name"].as_str().map(str::to_string);
+            let last_name    = entity["last_name"].as_str().map(str::to_string);
+            let gender       = entity["gender"].as_str().map(str::to_string);
+            let phone_number = entity["phone_number"].as_str().map(str::to_string);
+            let image_url    = entity["image_url"].as_str().map(str::to_string);
+            let app_id       = entity["app_id"].as_str().map(str::to_string);
+            let customer_ref = entity["customer"].as_str().map(str::to_string);
+
+            let date_of_birth = entity["date_of_birth"]
+                .as_str()
+                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+
+            if let Err(e) = sqlx::query!(
+                r#"
+                INSERT INTO kyc_nin_data (
+                    kyc_verification_id, nin,
+                    first_name, middle_name, last_name,
+                    gender, date_of_birth, phone_number,
+                    image_url, app_id, customer_ref
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (kyc_verification_id) DO NOTHING
+                "#,
+                kyc_id, nin,
+                first_name, middle_name, last_name,
+                gender, date_of_birth, phone_number,
+                image_url, app_id, customer_ref
+            )
+            .execute(db.get_ref())
+            .await
+            {
+                eprintln!("[dojah_webhook] NIN data insert error: {}", e);
+            }
+        }
+
+        "BVN" => {
+            let entity = &body["data"]["government_data"]["data"]["bvn"]["entity"];
+
+            let bvn          = entity["bvn"].as_str().unwrap_or("").to_string();
+            let first_name   = entity["first_name"].as_str().map(str::to_string);
+            let middle_name  = entity["middle_name"].as_str().map(str::to_string);
+            let last_name    = entity["last_name"].as_str().map(str::to_string);
+            let gender       = entity["gender"].as_str().map(str::to_string);
+            // BVN uses phone_number1 (primary), falls back to phone_number2
+            let phone_number = entity["phone_number1"]
+                .as_str()
+                .or_else(|| entity["phone_number2"].as_str())
+                .map(str::to_string);
+            let image_url    = entity["image_url"].as_str().map(str::to_string);
+            let app_id       = entity["app_id"].as_str().map(str::to_string);
+            let customer_ref = entity["customer"].as_str().map(str::to_string);
+
+            let date_of_birth = entity["date_of_birth"]
+                .as_str()
+                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+
+            if let Err(e) = sqlx::query!(
+                r#"
+                INSERT INTO kyc_bvn_data (
+                    kyc_verification_id, bvn,
+                    first_name, middle_name, last_name,
+                    gender, date_of_birth, phone_number,
+                    image_url, app_id, customer_ref
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (kyc_verification_id) DO NOTHING
+                "#,
+                kyc_id, bvn,
+                first_name, middle_name, last_name,
+                gender, date_of_birth, phone_number,
+                image_url, app_id, customer_ref
+            )
+            .execute(db.get_ref())
+            .await
+            {
+                eprintln!("[dojah_webhook] BVN data insert error: {}", e);
+            }
+        }
+
+        other => {
+            eprintln!("[dojah_webhook] Unhandled id_type: {}", other);
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "success",
+        "message": "Verification recorded"
+    }))
+}
+
 
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
-    dojah: web::Data<DojahClient>,
     redis: web::Data<ConnectionManager>,
     db: web::Data<PgPool>,
 ) -> impl Responder {
     if let Err(errors) = body.0.validate() {
-        println!("[signup] Validation failed: {:?}", errors);
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
             status: "error",
             message: "Invalid input",
@@ -51,6 +257,88 @@ pub async fn signup(
     }
 
     let mut _redis_conn = redis.get_ref().clone();
+
+    // ── Fetch NIN + identity details from kyc tables (webhook already stored this) ──
+    let kyc = match sqlx::query!(
+        r#"
+        SELECT
+            kv.value                                            AS nin,
+            knd.first_name,
+            knd.middle_name,
+            knd.last_name,
+            knd.gender,
+            knd.date_of_birth::TEXT                             AS date_of_birth,
+            knd.image_url,
+            kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,
+            kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,
+            kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,
+            kv.raw_payload -> 'entity' ->> 'residence_State'            AS state
+        FROM kyc_verifications kv
+        INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id
+        WHERE kv.reference_id = $1
+          AND kv.status = true
+        LIMIT 1
+        "#,
+        body.reference
+    )
+    .fetch_optional(db.get_ref())
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Invalid or expired signup reference. Please complete NIN verification first."
+            }));
+        }
+        Err(e) => {
+            eprintln!("[signup] KYC lookup error: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Something went wrong. Please try again."
+            }));
+        }
+    };
+
+    let nin = kyc.nin.clone();
+
+    let nin_value = match nin.clone() {
+        Some(v) => v,
+        None => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "NIN value missing from verification record."
+            }));
+        }
+    };
+
+    // ── Resolve referral code → referrer_id ──────────────────────────
+    let referrer_id: Option<String> = if let Some(code) = &body.referral_code {
+        match sqlx::query_scalar!(
+            "SELECT id::TEXT FROM accounts WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1",
+            code
+        )
+        .fetch_optional(db.get_ref())
+        .await
+        {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                return HttpResponse::BadRequest().json(serde_json::json!({
+                    "status": "error",
+                    "message": "Invalid referral code"
+                }));
+            }
+            Err(e) => {
+                eprintln!("[signup] referral code lookup error: {:?}", e);
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "status": "error",
+                    "message": "Something went wrong. Please try again."
+                }));
+            }
+        }
+    } else {
+        None
+    };
 
     // ── Single query to check all duplicates at once ──────────────────
     let existing = sqlx::query!(
@@ -67,14 +355,13 @@ pub async fn signup(
         "#,
         body.email,
         body.phone_no,
-        body.nin
+        nin
     )
     .fetch_optional(db.get_ref())
     .await;
 
     match existing {
         Ok(Some(row)) => {
-            // ── Determine which field matched ─────────────────────────
             let conflict_message = if row.email == body.email {
                 "An account with this email already exists"
             } else if row.phone_number.as_deref() == Some(&body.phone_no) {
@@ -83,7 +370,6 @@ pub async fn signup(
                 "An account with this NIN already exists"
             };
 
-            // ── If email not verified, resend OTP instead of erroring ──
             if !row.email_verified {
                 let otp_redis_key = format!("{}.verify.otp", body.email);
                 let event = SendOTPEvent {
@@ -98,15 +384,14 @@ pub async fn signup(
                 });
             }
 
-            // ── Account is verified, reject ───────────────────────────
             return HttpResponse::Conflict().json(serde_json::json!({
                 "status": "error",
                 "message": conflict_message
             }));
         }
-        Ok(None) => {} // no conflict, proceed
+        Ok(None) => {}
         Err(e) => {
-            println!("[signup] DB error: {:?}", e);
+            eprintln!("[signup] DB error: {:?}", e);
             return HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
@@ -114,17 +399,7 @@ pub async fn signup(
         }
     }
 
-    // ── NIN verification ──────────────────────────────────────────────
-    let nin_details = match dojah.lookup_nin(&body.nin).await {
-        Ok(resp) => resp.entity,
-        Err(e) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "status": "error",
-                "message": format!("NIN verification failed: {}", e)
-            }));
-        }
-    };
-
+    // ── Build and publish signup event ────────────────────────────────
     let otp_redis_key = format!("{}.verify.otp", body.email);
 
     let event = SignupEvent {
@@ -132,19 +407,20 @@ pub async fn signup(
         password: body.password.clone(),
         device_id: body.device_id.clone(),
         account_type: body.account_type.to_string(),
-        address: nin_details.residence_address_line_1.unwrap_or_default(),
         otp_redis_key,
-        nin: body.nin.clone(),
-        city: nin_details.residence_town.unwrap_or_default(),
-        lga: nin_details.residence_lga.unwrap_or_default(),
-        state: nin_details.residence_state.unwrap_or_default(),
-        firstname: nin_details.first_name.unwrap_or_default(),
-        lastname: nin_details.last_name.unwrap_or_default(),
-        middlename: nin_details.middle_name.unwrap_or_default(),
-        date_of_birth: nin_details.date_of_birth.unwrap_or_default(),
-        gender: nin_details.gender.unwrap_or_default(),
+        nin: nin_value,
+        firstname: kyc.first_name.unwrap_or_default(),
+        middlename: kyc.middle_name.unwrap_or_default(),
+        lastname: kyc.last_name.unwrap_or_default(),
+        gender: kyc.gender.unwrap_or_default(),
+        date_of_birth: kyc.date_of_birth.unwrap_or_default(),
         mobile_number: body.phone_no.clone(),
-        user_photo: nin_details.photo.unwrap_or_default(),
+        user_photo: kyc.image_url.unwrap_or_default(),
+        address: kyc.address.unwrap_or_default(),
+        city: kyc.city.unwrap_or_default(),
+        lga: kyc.lga.unwrap_or_default(),
+        state: kyc.state.unwrap_or_default(),
+        referrer_id, 
     };
 
     kafka.publish(&kafka_cfg.kafka_topic_account_signup, &body.email, &event);
@@ -872,7 +1148,7 @@ pub async fn get_user_info(
                tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,
                panic_message, panic_activated_at, panic_deactivated_at,
                account_number, account_name, bvn, nin,
-               nin_userid, created_at, updated_at
+               nin_userid, created_at, updated_at, referral_code
                FROM accounts WHERE id = $1"#,
             account_uuid
         ).fetch_one(db.get_ref()),
@@ -942,6 +1218,7 @@ pub async fn get_user_info(
         "nin_userid": row.nin_userid,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "referral_code": row.referral_code,
         "contact_history": history,
     });
 
@@ -960,21 +1237,21 @@ pub async fn get_user_info(
     )
 }
 
+
+
 pub async fn verify_palmpayment(
     auth: AuthUser,
     cfg: web::Data<crate::config::Config>,
-    body: web::Json<serde_json::Value>
+    client: web::Data<reqwest::Client>,
+    db: web::Data<PgPool>,
+    body: web::Json<serde_json::Value>,
 ) -> impl Responder {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    println!("\n [DEBUG START] verify_palmpayment | ID: {}", request_id);
+    let request_id = uuid::Uuid::new_v4();
 
     let token = match auth.token {
-        Some(t) => {
-            println!("Token found for request {}", request_id);
-            t
-        }
+        Some(t) => t,
         None => {
-            println!(" Missing token for request {}", request_id);
+            log::warn!("[{request_id}] verify_palmpayment: missing token");
             return HttpResponse::Unauthorized().json(ApiResponse {
                 message: "Missing token".into(),
                 status: ResponseStatus::ERROR,
@@ -982,46 +1259,116 @@ pub async fn verify_palmpayment(
         }
     };
 
-    let raw_payload = body.into_inner();
-    println!(
-        "Incoming Payload (ID: {}): {}",
-        request_id,
-        serde_json::to_string_pretty(&raw_payload).unwrap_or_default()
-    );
+    let account_uuid = match uuid::Uuid::parse_str(&auth.id) {
+        Ok(id) => id,
+        Err(_) => {
+            log::warn!("[{request_id}] verify_palmpayment: invalid account id");
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Invalid token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
 
-    let client = reqwest::Client::new();
+    let payload = body.into_inner();
     let target_url = format!("{}/verify-payment", cfg.palm_api_url);
 
-    println!(" Forwarding to: {}", target_url);
+    log::debug!("[{request_id}] forwarding to {target_url}");
 
     let res = client
         .post(&target_url)
-        .header("Authorization", format!("Bearer {}", token))
+        .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .json(&raw_payload)
-        .send().await;
+        .json(&payload)
+        .send()
+        .await;
 
     match res {
         Ok(response) => {
             let status = response.status();
-            println!(" Palm Service Response Status (ID: {}): {}", request_id, status);
+            log::info!("[{request_id}] palm service responded {status}");
 
             match response.json::<serde_json::Value>().await {
-                Ok(response_body) => {
-                    println!(
-                        " Palm Service Body (ID: {}): {}",
-                        request_id,
-                        serde_json::to_string_pretty(&response_body).unwrap_or_default()
-                    );
+                Ok(body) => {
+                    // success=true + verified=true → money moved, advance referral
+                    // success=true + verified=false → panic / mismatch, no update
+                    // 202 pending → success=false, excluded correctly
+                    let palm_success = body["success"].as_bool() == Some(true)
+                        && body["verified"].as_bool() == Some(true);
+
+                    if palm_success {
+                        let db_clone = db.clone();
+                        tokio::spawn(async move {
+                            match sqlx::query!(
+                                r#"
+                                INSERT INTO referrals (
+                                    referrer_id,
+                                    referred_id,
+                                    status,
+                                    palm_transfer_at
+                                )
+                                SELECT
+                                    a.referred_by,
+                                    a.id,
+                                    'palm_done',
+                                    NOW()
+                                FROM accounts a
+                                WHERE a.id          = $1
+                                  AND a.referred_by IS NOT NULL
+                                ON CONFLICT (referred_id) DO UPDATE
+                                    SET status           = CASE
+                                                               WHEN referrals.status = 'pending'
+                                                                    AND referrals.palm_transfer_at IS NULL
+                                                               THEN 'palm_done'
+                                                               ELSE referrals.status
+                                                           END,
+                                        palm_transfer_at = CASE
+                                                               WHEN referrals.palm_transfer_at IS NULL
+                                                               THEN NOW()
+                                                               ELSE referrals.palm_transfer_at
+                                                           END,
+                                        updated_at       = NOW()
+                                WHERE referrals.palm_transfer_at IS NULL
+                                  AND referrals.status = 'pending'
+                                "#,
+                                account_uuid
+                            )
+                            .execute(db_clone.get_ref())
+                            .await
+                            {
+                                Ok(r) => {
+                                    if r.rows_affected() > 0 {
+                                        log::info!(
+                                            "[referral] palm_done set for referred_id={}",
+                                            account_uuid
+                                        );
+                                    }
+                                    // rows_affected == 0 means either:
+                                    // - user was not referred (referred_by IS NULL)
+                                    // - palm already recorded (palm_transfer_at IS NOT NULL)
+                                    // - user was disqualified (vas before palm) — correctly ignored
+                                    // all are correct, nothing to do
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "[referral] palm_done upsert failed for referred_id={}: {}",
+                                        account_uuid,
+                                        e
+                                    );
+                                }
+                            }
+                        });
+                    }
 
                     HttpResponse::build(
-                        actix_web::http::StatusCode
-                            ::from_u16(status.as_u16())
-                            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
-                    ).json(response_body)
+                        actix_web::http::StatusCode::from_u16(status.as_u16())
+                            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                    )
+                    .json(body)
                 }
+
                 Err(e) => {
-                    println!(" Failed to parse Palm Service JSON (ID: {}): {:?}", request_id, e);
+                    log::error!("[{request_id}] failed to parse palm response: {e}");
                     HttpResponse::InternalServerError().json(ApiResponse {
                         message: "Failed to parse palm service response".into(),
                         status: ResponseStatus::ERROR,
@@ -1029,9 +1376,9 @@ pub async fn verify_palmpayment(
                 }
             }
         }
+
         Err(e) => {
-            println!(" Request to Palm Service FAILED (ID: {}): {:?}", request_id, e);
-            log::error!("Palm verify-payment request failed: {e}");
+            log::error!("[{request_id}] palm service unreachable: {e}");
             HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Palm service unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -1039,6 +1386,7 @@ pub async fn verify_palmpayment(
         }
     }
 }
+
 
 pub async fn enroll_palm(
     auth: AuthUser,
@@ -1838,13 +2186,13 @@ pub async fn change_email_submit(
     })
 }
 
+
 pub async fn upgrade_tier2(
     auth: AuthUser,
     body: web::Json<schemas::UpgradeTier2Request>,
     db: web::Data<PgPool>,
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
-    dojah: web::Data<DojahClient>,
 ) -> impl Responder {
     let account_id = auth.id.clone();
 
@@ -1874,9 +2222,39 @@ pub async fn upgrade_tier2(
         }
     };
 
-    // ── Fetch saved tier 1 fields from DB ─────────────────────────────────────
+    // ── Fetch BVN from kyc_verifications using the reference ──────────────────
+    let bvn: String = match sqlx::query_scalar!(
+        r#"
+        SELECT value FROM kyc_verifications
+        WHERE reference_id = $1
+          AND status = true
+          AND verification_type = 'bvn'
+        LIMIT 1
+        "#,
+        body.reference
+    )
+    .fetch_optional(db.get_ref())
+    .await
+    {
+        Ok(Some(Some(v))) => v,
+        Ok(Some(None)) | Ok(None) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Invalid or expired BVN verification reference. Please complete BVN verification first."
+            }));
+        }
+        Err(e) => {
+            eprintln!("[upgrade_tier2] KYC lookup error: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Something went wrong. Please try again."
+            }));
+        }
+    };
+
+    // ── Fetch account fields ──────────────────────────────────────────────────
     let row = match sqlx::query!(
-        "SELECT bvn, nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status
+        "SELECT nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status
          FROM accounts WHERE id = $1 AND deleted_at IS NULL",
         account_uuid
     )
@@ -1926,45 +2304,10 @@ pub async fn upgrade_tier2(
         });
     }
 
-    // ── BVN + selfie liveness check ───────────────────────────────────────────
-    
-    let bvn_selfie = match dojah.verify_bvn_selfie(BvnSelfieRequest {
-        bvn: body.bvn.clone(),
-        selfie_image: row.user_photo.clone().unwrap_or_default(),
-    })
-    .await
-    {
-        Ok(resp) => resp.entity,
-        Err(e) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "status": "error",
-                "message": format!("BVN verification failed: {}", e)
-            }));
-        }
-    };
-
-    let is_match = bvn_selfie
-        .selfie_verification
-        .as_ref()
-        .and_then(|s| s.match_)
-        .unwrap_or(false);
-
-    if !is_match {
-        let confidence = bvn_selfie
-            .selfie_verification
-            .as_ref()
-            .map(|s| s.confidence_value)
-            .unwrap_or(0.0);
-
-        return HttpResponse::BadRequest().json(serde_json::json!({
-            "status": "error",
-            "message": format!("Selfie does not match BVN photo (confidence: {:.2}%)", confidence)
-        }));
-    }
-
+    // ── Publish tier 2 upgrade event ──────────────────────────────────────────
     let event = Tier2UpgradeEvent {
         account_id: account_id.clone(),
-        bvn: body.bvn.clone(),
+        bvn,
         phone_no: row.phone_number.clone().unwrap_or_default(),
         id_type: 1,
         id_number: row.nin.clone().unwrap_or_default(),

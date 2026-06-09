@@ -20,6 +20,7 @@ pub struct SignupEvent {
     pub state: String,
     pub lga: String,
     pub user_photo: String,
+    pub referrer_id: Option<String>,
 }
 
 

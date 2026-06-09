@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                                INSERT INTO referrals (\n                                    referrer_id,\n                                    referred_id,\n                                    status,\n                                    palm_transfer_at\n                                )\n                                SELECT\n                                    a.referred_by,\n                                    a.id,\n                                    'palm_done',\n                                    NOW()\n                                FROM accounts a\n                                WHERE a.id          = $1\n                                  AND a.referred_by IS NOT NULL\n                                ON CONFLICT (referred_id) DO UPDATE\n                                    SET status           = CASE\n                                                               WHEN referrals.status = 'pending'\n                                                                    AND referrals.palm_transfer_at IS NULL\n                                                               THEN 'palm_done'\n                                                               ELSE referrals.status\n                                                           END,\n                                        palm_transfer_at = CASE\n                                                               WHEN referrals.palm_transfer_at IS NULL\n                                                               THEN NOW()\n                                                               ELSE referrals.palm_transfer_at\n                                                           END,\n                                        updated_at       = NOW()\n                                WHERE referrals.palm_transfer_at IS NULL\n                                  AND referrals.status = 'pending'\n                                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0fe1e94823b551f2778e0f55fe103bfcaeb03dca981e4d8730102ab38bf8058a"
+}

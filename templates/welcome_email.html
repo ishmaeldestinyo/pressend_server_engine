@@ -11,12 +11,29 @@
         .header h1 { color: #ffffff; margin: 0; font-size: 24px; }
         .body { padding: 40px 32px; }
         .body p { color: #374151; font-size: 16px; line-height: 1.6; }
-        .steps { background: #F9FAFB; border-radius: 8px; padding: 24px; margin: 24px 0; }
-        .step { display: flex; align-items: flex-start; margin-bottom: 16px; }
-        .step-number { background: #2563EB; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; }
-        .step-text { color: #374151; font-size: 15px; padding-top: 4px; }
-        .cta { text-align: center; margin: 32px 0; }
-        .cta a { background: #2563EB; color: white; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 16px; }
+        .vas-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 24px 0; }
+        .vas-card { border-radius: 8px; padding: 18px; }
+        .vas-card .icon { font-size: 24px; margin-bottom: 8px; }
+        .vas-card h3 { font-size: 15px; font-weight: bold; margin: 0 0 4px; }
+        .vas-card p { font-size: 13px; line-height: 1.5; margin: 0; color: #374151; }
+        .vas-airtime { background: #F0FDF4; border: 1px solid #86EFAC; }
+        .vas-airtime h3 { color: #166534; }
+        .vas-electric { background: #FFFBEB; border: 1px solid #FCD34D; }
+        .vas-electric h3 { color: #92400E; }
+        .vas-cable { background: #F5F3FF; border: 1px solid #C4B5FD; }
+        .vas-cable h3 { color: #5B21B6; }
+        .vas-water { background: #EFF6FF; border: 1px solid #93C5FD; }
+        .vas-water h3 { color: #1E40AF; }
+        .referral-box { background: #EFF6FF; border-left: 4px solid #2563EB; border-radius: 0 8px 8px 0; padding: 24px; margin: 24px 0; }
+        .referral-box h2 { color: #1D4ED8; font-size: 18px; margin: 0 0 8px; }
+        .referral-inner { background: #DBEAFE; border-radius: 6px; padding: 14px 16px; margin-top: 12px; }
+        .referral-inner p { color: #1E40AF; font-size: 14px; margin: 0; font-weight: bold; }
+        .referral-inner ul { color: #1E40AF; font-size: 14px; margin: 8px 0 0; padding-left: 18px; line-height: 1.8; }
+        .panic-box { background: #FEF2F2; border-left: 4px solid #DC2626; border-radius: 0 8px 8px 0; padding: 24px; margin: 24px 0; }
+        .panic-box h2 { color: #B91C1C; font-size: 18px; margin: 0 0 8px; }
+        .panic-inner { background: #FEE2E2; border-radius: 6px; padding: 14px 16px; margin-top: 12px; }
+        .panic-inner p { color: #991B1B; font-size: 14px; margin: 0; font-weight: bold; }
+        .panic-inner ul { color: #991B1B; font-size: 14px; margin: 8px 0 0; padding-left: 18px; line-height: 1.8; }
         .footer { background: #F9FAFB; padding: 24px 32px; text-align: center; }
         .footer p { color: #9CA3AF; font-size: 12px; margin: 0; }
     </style>
@@ -28,22 +45,59 @@
         </div>
         <div class="body">
             <p>Hi <strong>{{ firstname }}</strong>,</p>
-            <p>Your account has been verified. Here's how to get started:</p>
-            <div class="steps">
-                <div class="step">
-                    <div class="step-number">1</div>
-                    <div class="step-text"><strong>Complete your profile</strong> — Add your personal details</div>
+            <p>Your account is ready. Here's what you can do right away:</p>
+
+            <div class="vas-grid">
+                <div class="vas-card vas-airtime">
+                    <div class="icon">📱</div>
+                    <h3>Airtime & Data</h3>
+                    <p>Buy airtime or data for any network instantly — MTN, Airtel, Glo, 9mobile.</p>
                 </div>
-                <div class="step">
-                    <div class="step-number">2</div>
-                    <div class="step-text"><strong>Upgrade to Tier 1</strong> — Provide your BVN or NIN to activate your wallet</div>
+                <div class="vas-card vas-electric">
+                    <h3>Electricity</h3>
+                    <p>Pay your PHCN/NEPA bills and get your token delivered instantly.</p>
                 </div>
-                <div class="step">
-                    <div class="step-number">3</div>
-                    <div class="step-text"><strong>Fund your wallet</strong> — Add money and start transacting</div>
+                <div class="vas-card vas-cable">
+                    <h3>Cable TV</h3>
+                    <p>Renew DSTV, GOtv, or Startimes subscriptions without leaving the app.</p>
+                </div>
+                <div class="vas-card vas-water">
+                    <h3>Water & Utility</h3>
+                    <p>Pay water bills and other utility services seamlessly in one place.</p>
                 </div>
             </div>
-            <p>If you have any questions, reach us at <a href="mailto:support@blinq.com.ng">support@blinq.com.ng</a></p>
+
+            <div class="referral-box">
+                <h2>Refer & Earn</h2>
+                <p style="color:#374151; font-size:15px; line-height:1.6; margin:0 0 12px;">
+                    Invite your friends and earn <strong>₦1,000</strong> for every person who joins and transacts — up to <strong>10 referrals</strong>, that's <strong>₦10,000</strong> in your pocket!
+                </p>
+                <div class="referral-inner">
+                    <p>How it works:</p>
+                    <ul>
+                        <li>Share your unique referral code with friends</li>
+                        <li>They sign up and make a transfer, deposit, or withdrawal using their palm</li>
+                        <li>You earn ₦1,000 automatically — up to 10 people</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="panic-box">
+                <h2>🛡️ Panic Palm Enrollment</h2>
+                <p style="color:#374151; font-size:15px; line-height:1.6; margin:0 0 12px;">
+                    Stay protected in threatening situations. Enroll a <strong>panic palm</strong> — a decoy fingerprint that opens a limited, decoy version of your account, keeping your real funds safe when under duress.
+                </p>
+                <div class="panic-inner">
+                    <p>How it helps:</p>
+                    <ul>
+                        <li>Use your panic palm when forced by a thief or attacker</li>
+                        <li>They see a decoy account — your real balance stays hidden</li>
+                        <li>Enroll it now in Settings → Palm → Panic Palm</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p>Questions? Reach us at <a href="mailto:support@blinq.com.ng" style="color:#2563EB;">support@blinq.com.ng</a></p>
         </div>
         <div class="footer">
             <p>&copy; 2025 {{ app_name }}. All rights reserved.</p>

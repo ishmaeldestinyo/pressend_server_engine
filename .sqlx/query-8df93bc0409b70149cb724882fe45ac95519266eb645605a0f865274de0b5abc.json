@@ -1,40 +1,35 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT bvn, nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status\n         FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+  "query": "SELECT nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status\n         FROM accounts WHERE id = $1 AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "bvn",
-        "type_info": "Varchar"
-      },
-      {
-        "ordinal": 1,
         "name": "nin",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 2,
+        "ordinal": 1,
         "name": "user_photo",
         "type_info": "Text"
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "phone_number",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "current_tier",
         "type_info": "Int2"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "pending_tier_upgrade",
         "type_info": "Int2"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "status",
         "type_info": "Varchar"
       }
@@ -48,11 +43,10 @@
       true,
       true,
       true,
-      true,
       false,
       true,
       false
     ]
   },
-  "hash": "d8c8a7fd7e26bfb606a9b6fdd244676651236e2135c02289d82ab5885fc856b6"
+  "hash": "8df93bc0409b70149cb724882fe45ac95519266eb645605a0f865274de0b5abc"
 }

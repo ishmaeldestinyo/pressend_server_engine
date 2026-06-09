@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO kyc_nin_data (\n                    kyc_verification_id, nin,\n                    first_name, middle_name, last_name,\n                    gender, date_of_birth, phone_number,\n                    image_url, app_id, customer_ref\n                )\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n                ON CONFLICT (kyc_verification_id) DO NOTHING\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Date",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "785d5b59d457232860807470e8610b28f47e1798c2fc3c473a926673b06ce736"
+}
