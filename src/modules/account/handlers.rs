@@ -35,45 +35,45 @@ use uuid::Uuid;
 use validator::Validate;
 use serde_json::Value;
 
-
-pub async fn dojah_webhook(
-    body: web::Json<Value>,
-    db: web::Data<PgPool>,
-) -> impl Responder {
+pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> impl Responder {
     println!("DOJAH WEBHOOK BODY: {:#?}", body);
 
     let body = body.into_inner();
 
     let verification_status = body["verification_status"].as_str().unwrap_or("");
     if verification_status != "Completed" {
-        return HttpResponse::Ok().json(serde_json::json!({
+        return HttpResponse::Ok().json(
+            serde_json::json!({
             "status": "success",
             "message": "Acknowledged"
-        }));
+        })
+        );
     }
 
     let reference_id = match body["reference_id"].as_str() {
         Some(r) => r.to_string(),
         None => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
+            return HttpResponse::BadRequest().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Missing reference_id"
-            }));
+            })
+            );
         }
     };
 
-    let widget_id         = body["widget_id"].as_str().map(str::to_string);
-    let id_type           = body["id_type"].as_str().unwrap_or("").to_string();
+    let widget_id = body["widget_id"].as_str().map(str::to_string);
+    let id_type = body["id_type"].as_str().unwrap_or("").to_string();
     let verification_type = body["verification_type"].as_str().unwrap_or("").to_string();
     let verification_mode = body["verification_mode"].as_str().unwrap_or("").to_string();
-    let verification_url  = body["verification_url"].as_str().map(str::to_string);
-    let value             = body["value"].as_str().map(str::to_string);
-    let status            = body["status"].as_bool().unwrap_or(false);
-    let aml_status        = body["aml"]["status"].as_bool().unwrap_or(false);
-    let message           = body["message"].as_str().map(str::to_string);
-    let selfie_url        = body["selfie_url"].as_str().map(str::to_string);
-    let device_info       = body["metadata"]["device_info"].as_str().map(str::to_string);
-    let ip_info           = body["metadata"]["ipinfo"].clone();
+    let verification_url = body["verification_url"].as_str().map(str::to_string);
+    let value = body["value"].as_str().map(str::to_string);
+    let status = body["status"].as_bool().unwrap_or(false);
+    let aml_status = body["aml"]["status"].as_bool().unwrap_or(false);
+    let message = body["message"].as_str().map(str::to_string);
+    let selfie_url = body["selfie_url"].as_str().map(str::to_string);
+    let device_info = body["metadata"]["device_info"].as_str().map(str::to_string);
+    let ip_info = body["metadata"]["ipinfo"].clone();
 
     let liveness_score = body["data"]["selfie"]["data"]["liveness_score"]
         .as_f64()
@@ -85,8 +85,10 @@ pub async fn dojah_webhook(
 
     let verified_at = if status { Some(chrono::Utc::now()) } else { None };
 
-    let kyc_id: Uuid = match sqlx::query_scalar!(
-        r#"
+    let kyc_id: Uuid = match
+        sqlx
+            ::query_scalar!(
+                r#"
         INSERT INTO kyc_verifications (
             reference_id, widget_id,
             id_type, verification_type, verification_mode,
@@ -106,41 +108,44 @@ pub async fn dojah_webhook(
         ON CONFLICT (reference_id) DO NOTHING
         RETURNING id
         "#,
-        reference_id,
-        widget_id,
-        id_type,
-        verification_type,
-        verification_mode,
-        verification_status,
-        verification_url,
-        value,
-        status,
-        aml_status,
-        message,
-        selfie_url,
-        liveness_score,
-        match_score,
-        device_info,
-        ip_info,
-        body,
-        verified_at
-    )
-    .fetch_optional(db.get_ref())
-    .await
+                reference_id,
+                widget_id,
+                id_type,
+                verification_type,
+                verification_mode,
+                verification_status,
+                verification_url,
+                value,
+                status,
+                aml_status,
+                message,
+                selfie_url,
+                liveness_score,
+                match_score,
+                device_info,
+                ip_info,
+                body,
+                verified_at
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(id)) => id,
         Ok(None) => {
-            return HttpResponse::Ok().json(serde_json::json!({
+            return HttpResponse::Ok().json(
+                serde_json::json!({
                 "status": "success",
                 "message": "Already processed"
-            }));
+            })
+            );
         }
         Err(e) => {
             eprintln!("[dojah_webhook] DB insert error: {}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return HttpResponse::InternalServerError().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Failed to store verification"
-            }));
+            })
+            );
         }
     };
 
@@ -148,22 +153,24 @@ pub async fn dojah_webhook(
         "NIN" => {
             let entity = &body["data"]["government_data"]["data"]["nin"]["entity"];
 
-            let nin          = entity["nin"].as_str().unwrap_or("").to_string();
-            let first_name   = entity["first_name"].as_str().map(str::to_string);
-            let middle_name  = entity["middle_name"].as_str().map(str::to_string);
-            let last_name    = entity["last_name"].as_str().map(str::to_string);
-            let gender       = entity["gender"].as_str().map(str::to_string);
+            let nin = entity["nin"].as_str().unwrap_or("").to_string();
+            let first_name = entity["first_name"].as_str().map(str::to_string);
+            let middle_name = entity["middle_name"].as_str().map(str::to_string);
+            let last_name = entity["last_name"].as_str().map(str::to_string);
+            let gender = entity["gender"].as_str().map(str::to_string);
             let phone_number = entity["phone_number"].as_str().map(str::to_string);
-            let image_url    = entity["image_url"].as_str().map(str::to_string);
-            let app_id       = entity["app_id"].as_str().map(str::to_string);
+            let image_url = entity["image_url"].as_str().map(str::to_string);
+            let app_id = entity["app_id"].as_str().map(str::to_string);
             let customer_ref = entity["customer"].as_str().map(str::to_string);
 
             let date_of_birth = entity["date_of_birth"]
                 .as_str()
                 .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
-            if let Err(e) = sqlx::query!(
-                r#"
+            if
+                let Err(e) = sqlx
+                    ::query!(
+                        r#"
                 INSERT INTO kyc_nin_data (
                     kyc_verification_id, nin,
                     first_name, middle_name, last_name,
@@ -173,13 +180,19 @@ pub async fn dojah_webhook(
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (kyc_verification_id) DO NOTHING
                 "#,
-                kyc_id, nin,
-                first_name, middle_name, last_name,
-                gender, date_of_birth, phone_number,
-                image_url, app_id, customer_ref
-            )
-            .execute(db.get_ref())
-            .await
+                        kyc_id,
+                        nin,
+                        first_name,
+                        middle_name,
+                        last_name,
+                        gender,
+                        date_of_birth,
+                        phone_number,
+                        image_url,
+                        app_id,
+                        customer_ref
+                    )
+                    .execute(db.get_ref()).await
             {
                 eprintln!("[dojah_webhook] NIN data insert error: {}", e);
             }
@@ -188,26 +201,28 @@ pub async fn dojah_webhook(
         "BVN" => {
             let entity = &body["data"]["government_data"]["data"]["bvn"]["entity"];
 
-            let bvn          = entity["bvn"].as_str().unwrap_or("").to_string();
-            let first_name   = entity["first_name"].as_str().map(str::to_string);
-            let middle_name  = entity["middle_name"].as_str().map(str::to_string);
-            let last_name    = entity["last_name"].as_str().map(str::to_string);
-            let gender       = entity["gender"].as_str().map(str::to_string);
+            let bvn = entity["bvn"].as_str().unwrap_or("").to_string();
+            let first_name = entity["first_name"].as_str().map(str::to_string);
+            let middle_name = entity["middle_name"].as_str().map(str::to_string);
+            let last_name = entity["last_name"].as_str().map(str::to_string);
+            let gender = entity["gender"].as_str().map(str::to_string);
             // BVN uses phone_number1 (primary), falls back to phone_number2
             let phone_number = entity["phone_number1"]
                 .as_str()
                 .or_else(|| entity["phone_number2"].as_str())
                 .map(str::to_string);
-            let image_url    = entity["image_url"].as_str().map(str::to_string);
-            let app_id       = entity["app_id"].as_str().map(str::to_string);
+            let image_url = entity["image_url"].as_str().map(str::to_string);
+            let app_id = entity["app_id"].as_str().map(str::to_string);
             let customer_ref = entity["customer"].as_str().map(str::to_string);
 
             let date_of_birth = entity["date_of_birth"]
                 .as_str()
                 .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
-            if let Err(e) = sqlx::query!(
-                r#"
+            if
+                let Err(e) = sqlx
+                    ::query!(
+                        r#"
                 INSERT INTO kyc_bvn_data (
                     kyc_verification_id, bvn,
                     first_name, middle_name, last_name,
@@ -217,13 +232,19 @@ pub async fn dojah_webhook(
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (kyc_verification_id) DO NOTHING
                 "#,
-                kyc_id, bvn,
-                first_name, middle_name, last_name,
-                gender, date_of_birth, phone_number,
-                image_url, app_id, customer_ref
-            )
-            .execute(db.get_ref())
-            .await
+                        kyc_id,
+                        bvn,
+                        first_name,
+                        middle_name,
+                        last_name,
+                        gender,
+                        date_of_birth,
+                        phone_number,
+                        image_url,
+                        app_id,
+                        customer_ref
+                    )
+                    .execute(db.get_ref()).await
             {
                 eprintln!("[dojah_webhook] BVN data insert error: {}", e);
             }
@@ -234,11 +255,14 @@ pub async fn dojah_webhook(
         }
     }
 
-    HttpResponse::Ok().json(serde_json::json!({
+    HttpResponse::Ok().json(
+        serde_json::json!({
         "status": "success",
         "message": "Verification recorded"
-    }))
+    })
+    )
 }
+
 
 
 pub async fn signup(
@@ -246,7 +270,7 @@ pub async fn signup(
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
     redis: web::Data<ConnectionManager>,
-    db: web::Data<PgPool>,
+    db: web::Data<PgPool>
 ) -> impl Responder {
     if let Err(errors) = body.0.validate() {
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
@@ -259,8 +283,10 @@ pub async fn signup(
     let mut _redis_conn = redis.get_ref().clone();
 
     // ── Fetch NIN + identity details from kyc tables (webhook already stored this) ──
-    let kyc = match sqlx::query!(
-        r#"
+    let kyc = match
+        sqlx
+            ::query!(
+                r#"
         SELECT
             kv.value                                            AS nin,
             knd.first_name,
@@ -269,6 +295,7 @@ pub async fn signup(
             knd.gender,
             knd.date_of_birth::TEXT                             AS date_of_birth,
             knd.image_url,
+            knd.phone_number,
             kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,
             kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,
             kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,
@@ -279,24 +306,27 @@ pub async fn signup(
           AND kv.status = true
         LIMIT 1
         "#,
-        body.reference
-    )
-    .fetch_optional(db.get_ref())
-    .await
+                body.reference
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(row)) => row,
         Ok(None) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
+            return HttpResponse::BadRequest().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Invalid or expired signup reference. Please complete NIN verification first."
-            }));
+            })
+            );
         }
         Err(e) => {
             eprintln!("[signup] KYC lookup error: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return HttpResponse::InternalServerError().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            }));
+            })
+            );
         }
     };
 
@@ -305,35 +335,42 @@ pub async fn signup(
     let nin_value = match nin.clone() {
         Some(v) => v,
         None => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
+            return HttpResponse::BadRequest().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "NIN value missing from verification record."
-            }));
+            })
+            );
         }
     };
 
     // ── Resolve referral code → referrer_id ──────────────────────────
     let referrer_id: Option<String> = if let Some(code) = &body.referral_code {
-        match sqlx::query_scalar!(
-            "SELECT id::TEXT FROM accounts WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1",
-            code
-        )
-        .fetch_optional(db.get_ref())
-        .await
+        match
+            sqlx
+                ::query_scalar!(
+                    "SELECT id::TEXT FROM accounts WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1",
+                    code
+                )
+                .fetch_optional(db.get_ref()).await
         {
             Ok(Some(id)) => id,
             Ok(None) => {
-                return HttpResponse::BadRequest().json(serde_json::json!({
+                return HttpResponse::BadRequest().json(
+                    serde_json::json!({
                     "status": "error",
                     "message": "Invalid referral code"
-                }));
+                })
+                );
             }
             Err(e) => {
                 eprintln!("[signup] referral code lookup error: {:?}", e);
-                return HttpResponse::InternalServerError().json(serde_json::json!({
+                return HttpResponse::InternalServerError().json(
+                    serde_json::json!({
                     "status": "error",
                     "message": "Something went wrong. Please try again."
-                }));
+                })
+                );
             }
         }
     } else {
@@ -341,31 +378,26 @@ pub async fn signup(
     };
 
     // ── Single query to check all duplicates at once ──────────────────
-    let existing = sqlx::query!(
+        let existing = sqlx::query!(
         r#"
         SELECT
             status,
             email,
-            phone_number,
             nin,
             email_verified
         FROM accounts
-        WHERE email = $1 OR phone_number = $2 OR nin = $3
+        WHERE email = $1 OR nin = $2
         LIMIT 1
         "#,
         body.email,
-        body.phone_no,
         nin
     )
-    .fetch_optional(db.get_ref())
-    .await;
+    .fetch_optional(db.get_ref()).await;
 
     match existing {
         Ok(Some(row)) => {
             let conflict_message = if row.email == body.email {
                 "An account with this email already exists"
-            } else if row.phone_number.as_deref() == Some(&body.phone_no) {
-                "An account with this phone number already exists"
             } else {
                 "An account with this NIN already exists"
             };
@@ -384,18 +416,22 @@ pub async fn signup(
                 });
             }
 
-            return HttpResponse::Conflict().json(serde_json::json!({
+            return HttpResponse::Conflict().json(
+                serde_json::json!({
                 "status": "error",
                 "message": conflict_message
-            }));
+            })
+            );
         }
         Ok(None) => {}
         Err(e) => {
             eprintln!("[signup] DB error: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return HttpResponse::InternalServerError().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            }));
+            })
+            );
         }
     }
 
@@ -414,13 +450,13 @@ pub async fn signup(
         lastname: kyc.last_name.unwrap_or_default(),
         gender: kyc.gender.unwrap_or_default(),
         date_of_birth: kyc.date_of_birth.unwrap_or_default(),
-        mobile_number: body.phone_no.clone(),
+        mobile_number: kyc.phone_number.unwrap_or_default(),
         user_photo: kyc.image_url.unwrap_or_default(),
         address: kyc.address.unwrap_or_default(),
         city: kyc.city.unwrap_or_default(),
         lga: kyc.lga.unwrap_or_default(),
         state: kyc.state.unwrap_or_default(),
-        referrer_id, 
+        referrer_id,
     };
 
     kafka.publish(&kafka_cfg.kafka_topic_account_signup, &body.email, &event);
@@ -430,7 +466,6 @@ pub async fn signup(
         status: ResponseStatus::SUCCESS,
     })
 }
-
 
 pub async fn send_otp(
     body: web::Json<schemas::SendOTPRequest>,
@@ -520,10 +555,7 @@ pub async fn verify_otp(
                 .arg(&otp_redis_key)
                 .query_async(&mut redis_conn).await;
         },
-        sqlx::query!(
-            "SELECT id FROM accounts WHERE email = $1",
-            email
-        ).fetch_one(db.get_ref())
+        sqlx::query!("SELECT id FROM accounts WHERE email = $1", email).fetch_one(db.get_ref())
     );
 
     let account_id = match account {
@@ -539,8 +571,12 @@ pub async fn verify_otp(
 
     let secret = cfg.jwt_secret.clone();
     let (access_token, refresh_token) = tokio::join!(
-        async { generate_access_token(&account_id, &secret) },
-        async { generate_refresh_token(&account_id, &secret) }
+        async {
+            generate_access_token(&account_id, &secret)
+        },
+        async {
+            generate_refresh_token(&account_id, &secret)
+        }
     );
 
     let access_token = match access_token {
@@ -641,12 +677,13 @@ pub async fn signin(
         });
     }
 
-    let account = sqlx::query!(
-        "SELECT id, email, password_hash, status, device_id, is_2fa_enabled, firstname
+    let account = sqlx
+        ::query!(
+            "SELECT id, email, password_hash, status, device_id, is_2fa_enabled, firstname
          FROM accounts WHERE email = $1 AND deleted_at IS NULL",
-        email
-    )
-    .fetch_optional(db.get_ref()).await;
+            email
+        )
+        .fetch_optional(db.get_ref()).await;
 
     let row = match account {
         Ok(Some(r)) => r,
@@ -730,7 +767,11 @@ pub async fn signin(
             message: format!(
                 "Invalid email or password. {} attempt{} remaining before lockout.",
                 attempts_left,
-                if attempts_left != 1 { "s" } else { "" }
+                if attempts_left != 1 {
+                    "s"
+                } else {
+                    ""
+                }
             ).into(),
             status: ResponseStatus::ERROR,
         });
@@ -806,8 +847,12 @@ pub async fn signin(
     let secret = cfg.jwt_secret.clone();
 
     let (access_token, refresh_token) = tokio::join!(
-        async { generate_access_token(&account_id, &secret) },
-        async { generate_refresh_token(&account_id, &secret) }
+        async {
+            generate_access_token(&account_id, &secret)
+        },
+        async {
+            generate_refresh_token(&account_id, &secret)
+        }
     );
 
     let access_token = match access_token {
@@ -892,10 +937,12 @@ pub async fn signin_new_device_verify(
     }
 
     let (account, _): (Result<_, sqlx::Error>, Result<_, redis::RedisError>) = tokio::join!(
-        sqlx::query!(
-            "SELECT id, device_id, firstname FROM accounts WHERE email = $1 AND deleted_at IS NULL",
-            email
-        ).fetch_optional(db.get_ref()),
+        sqlx
+            ::query!(
+                "SELECT id, device_id, firstname FROM accounts WHERE email = $1 AND deleted_at IS NULL",
+                email
+            )
+            .fetch_optional(db.get_ref()),
         async {
             redis::cmd("DEL").arg(&otp_key).query_async::<_, ()>(&mut redis_conn).await
         }
@@ -922,8 +969,12 @@ pub async fn signin_new_device_verify(
     let secret = cfg.jwt_secret.clone();
 
     let (access_token, refresh_token) = tokio::join!(
-        async { generate_access_token(&account_id, &secret) },
-        async { generate_refresh_token(&account_id, &secret) }
+        async {
+            generate_access_token(&account_id, &secret)
+        },
+        async {
+            generate_refresh_token(&account_id, &secret)
+        }
     );
 
     let access_token = match access_token {
@@ -1000,11 +1051,12 @@ pub async fn delete_account(
         }
     };
 
-    let account = sqlx::query!(
-        "SELECT email, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_one(db.get_ref()).await;
+    let account = sqlx
+        ::query!(
+            "SELECT email, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+            account_uuid
+        )
+        .fetch_one(db.get_ref()).await;
 
     let row = match account {
         Ok(r) => r,
@@ -1072,8 +1124,12 @@ pub async fn refresh_token(
     let id = claims.sub.clone();
 
     let (access_token, refresh_token) = tokio::join!(
-        async { generate_access_token(&id, &secret) },
-        async { generate_refresh_token(&id, &secret) }
+        async {
+            generate_access_token(&id, &secret)
+        },
+        async {
+            generate_refresh_token(&id, &secret)
+        }
     );
 
     let access_token = match access_token {
@@ -1141,8 +1197,9 @@ pub async fn get_user_info(
     };
 
     let (account, contact_history): (Result<_, sqlx::Error>, Result<_, sqlx::Error>) = tokio::join!(
-        sqlx::query!(
-            r#"SELECT id, email, firstname, lastname, othername, phone_number,
+        sqlx
+            ::query!(
+                r#"SELECT id, email, firstname, lastname, othername, phone_number,
                email_verified, phone_no_verified, status, account_type,
                is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,
                tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,
@@ -1150,15 +1207,18 @@ pub async fn get_user_info(
                account_number, account_name, bvn, nin,
                nin_userid, created_at, updated_at, referral_code
                FROM accounts WHERE id = $1"#,
-            account_uuid
-        ).fetch_one(db.get_ref()),
-        sqlx::query!(
-            r#"SELECT id, field, old_value, new_value, registered_at, changed_at
+                account_uuid
+            )
+            .fetch_one(db.get_ref()),
+        sqlx
+            ::query!(
+                r#"SELECT id, field, old_value, new_value, registered_at, changed_at
                FROM account_contact_history
                WHERE account_id = $1
                ORDER BY registered_at DESC"#,
-            account_uuid
-        ).fetch_all(db.get_ref())
+                account_uuid
+            )
+            .fetch_all(db.get_ref())
     );
 
     let row = match account {
@@ -1189,7 +1249,26 @@ pub async fn get_user_info(
         Err(_) => vec![],
     };
 
-    let data = serde_json::json!({
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    let daily_key = format!("daily_txn_total:{}:{}", account_uuid, today);
+
+    let daily_total: f64 = redis
+        ::cmd("GET")
+        .arg(&daily_key)
+        .query_async(&mut redis_conn).await
+        .unwrap_or(None)
+        .unwrap_or(0.0);
+
+    let daily_limit: Option<f64> = match row.current_tier {
+        1 => Some(50_000.0),
+        2 => Some(200_000.0),
+        _ => None, // tier 3 = unlimited
+    };
+
+    let exceeded_limit = daily_limit.map(|limit| daily_total >= limit);
+
+    let data =
+        serde_json::json!({
         "id": row.id,
         "email": row.email,
         "firstname": row.firstname,
@@ -1220,6 +1299,9 @@ pub async fn get_user_info(
         "updated_at": row.updated_at,
         "referral_code": row.referral_code,
         "contact_history": history,
+        "daily_outgoing_total": daily_total,
+        "daily_limit":          daily_limit,
+        "exceeded_limit":       exceeded_limit,
     });
 
     let _: Result<(), redis::RedisError> = redis
@@ -1237,21 +1319,18 @@ pub async fn get_user_info(
     )
 }
 
-
-
 pub async fn verify_palmpayment(
     auth: AuthUser,
     cfg: web::Data<crate::config::Config>,
     client: web::Data<reqwest::Client>,
     db: web::Data<PgPool>,
-    body: web::Json<serde_json::Value>,
+    body: web::Json<serde_json::Value>
 ) -> impl Responder {
     let request_id = uuid::Uuid::new_v4();
 
     let token = match auth.token {
         Some(t) => t,
         None => {
-            log::warn!("[{request_id}] verify_palmpayment: missing token");
             return HttpResponse::Unauthorized().json(ApiResponse {
                 message: "Missing token".into(),
                 status: ResponseStatus::ERROR,
@@ -1262,7 +1341,6 @@ pub async fn verify_palmpayment(
     let account_uuid = match uuid::Uuid::parse_str(&auth.id) {
         Ok(id) => id,
         Err(_) => {
-            log::warn!("[{request_id}] verify_palmpayment: invalid account id");
             return HttpResponse::Unauthorized().json(ApiResponse {
                 message: "Invalid token".into(),
                 status: ResponseStatus::ERROR,
@@ -1273,34 +1351,33 @@ pub async fn verify_palmpayment(
     let payload = body.into_inner();
     let target_url = format!("{}/verify-payment", cfg.palm_api_url);
 
-    log::debug!("[{request_id}] forwarding to {target_url}");
-
     let res = client
         .post(&target_url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .json(&payload)
-        .send()
-        .await;
+        .send().await;
 
     match res {
         Ok(response) => {
             let status = response.status();
-            log::info!("[{request_id}] palm service responded {status}");
 
             match response.json::<serde_json::Value>().await {
                 Ok(body) => {
                     // success=true + verified=true → money moved, advance referral
                     // success=true + verified=false → panic / mismatch, no update
                     // 202 pending → success=false, excluded correctly
-                    let palm_success = body["success"].as_bool() == Some(true)
-                        && body["verified"].as_bool() == Some(true);
+                    let palm_success =
+                        body["success"].as_bool() == Some(true) &&
+                        body["verified"].as_bool() == Some(true);
 
                     if palm_success {
                         let db_clone = db.clone();
                         tokio::spawn(async move {
-                            match sqlx::query!(
-                                r#"
+                            match
+                                sqlx
+                                    ::query!(
+                                        r#"
                                 INSERT INTO referrals (
                                     referrer_id,
                                     referred_id,
@@ -1331,10 +1408,9 @@ pub async fn verify_palmpayment(
                                 WHERE referrals.palm_transfer_at IS NULL
                                   AND referrals.status = 'pending'
                                 "#,
-                                account_uuid
-                            )
-                            .execute(db_clone.get_ref())
-                            .await
+                                        account_uuid
+                                    )
+                                    .execute(db_clone.get_ref()).await
                             {
                                 Ok(r) => {
                                     if r.rows_affected() > 0 {
@@ -1361,10 +1437,10 @@ pub async fn verify_palmpayment(
                     }
 
                     HttpResponse::build(
-                        actix_web::http::StatusCode::from_u16(status.as_u16())
-                            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
-                    )
-                    .json(body)
+                        actix_web::http::StatusCode
+                            ::from_u16(status.as_u16())
+                            .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
+                    ).json(body)
                 }
 
                 Err(e) => {
@@ -1386,7 +1462,6 @@ pub async fn verify_palmpayment(
         }
     }
 }
-
 
 pub async fn enroll_palm(
     auth: AuthUser,
@@ -1411,32 +1486,35 @@ pub async fn enroll_palm(
         };
 
         let result = if enabled {
-            sqlx::query!(
-                r#"UPDATE accounts SET
+            sqlx
+                ::query!(
+                    r#"UPDATE accounts SET
                     panic_enabled = TRUE,
                     panic_message = $1,
                     panic_activated_at = NOW(),
                     panic_deactivated_at = NULL,
                     updated_at = NOW()
                 WHERE id = $2"#,
-                body.get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Service temporarily unavailable")
-                    .to_string(),
-                account_uuid
-            )
-            .execute(db.get_ref()).await
+                    body
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Service temporarily unavailable")
+                        .to_string(),
+                    account_uuid
+                )
+                .execute(db.get_ref()).await
         } else {
-            sqlx::query!(
-                r#"UPDATE accounts SET
+            sqlx
+                ::query!(
+                    r#"UPDATE accounts SET
                     panic_enabled = FALSE,
                     panic_message = NULL,
                     panic_deactivated_at = NOW(),
                     updated_at = NOW()
                 WHERE id = $1"#,
-                account_uuid
-            )
-            .execute(db.get_ref()).await
+                    account_uuid
+                )
+                .execute(db.get_ref()).await
         };
 
         if let Err(e) = result {
@@ -1493,8 +1571,6 @@ pub async fn enroll_palm(
         }
     }
 }
-
-
 
 pub async fn delete_palm(
     auth: AuthUser,
@@ -1711,11 +1787,9 @@ pub async fn change_password(
         }
     };
 
-    let account = sqlx::query!(
-        "SELECT email, password_hash FROM accounts WHERE id = $1",
-        account_uuid
-    )
-    .fetch_one(db.get_ref()).await;
+    let account = sqlx
+        ::query!("SELECT email, password_hash FROM accounts WHERE id = $1", account_uuid)
+        .fetch_one(db.get_ref()).await;
 
     let row = match account {
         Ok(r) => r,
@@ -1896,11 +1970,9 @@ pub async fn reset_password_submit(
         }
     }
 
-    let account = sqlx::query!(
-        "SELECT id, firstname FROM accounts WHERE email = $1 AND deleted_at IS NULL",
-        email
-    )
-    .fetch_optional(db.get_ref()).await;
+    let account = sqlx
+        ::query!("SELECT id, firstname FROM accounts WHERE email = $1 AND deleted_at IS NULL", email)
+        .fetch_optional(db.get_ref()).await;
 
     let row = match account {
         Ok(Some(r)) => r,
@@ -2111,11 +2183,9 @@ pub async fn change_email_submit(
         });
     }
 
-    let email_taken = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM accounts WHERE email = $1)",
-        new_email
-    )
-    .fetch_one(db.get_ref()).await;
+    let email_taken = sqlx
+        ::query_scalar!("SELECT EXISTS(SELECT 1 FROM accounts WHERE email = $1)", new_email)
+        .fetch_one(db.get_ref()).await;
 
     match email_taken {
         Ok(Some(true)) => {
@@ -2144,11 +2214,12 @@ pub async fn change_email_submit(
         }
     };
 
-    let account = sqlx::query!(
-        "SELECT id, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_optional(db.get_ref()).await;
+    let account = sqlx
+        ::query!(
+            "SELECT id, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+            account_uuid
+        )
+        .fetch_optional(db.get_ref()).await;
 
     let row = match account {
         Ok(Some(r)) => r,
@@ -2186,13 +2257,12 @@ pub async fn change_email_submit(
     })
 }
 
-
 pub async fn upgrade_tier2(
     auth: AuthUser,
     body: web::Json<schemas::UpgradeTier2Request>,
     db: web::Data<PgPool>,
     kafka: web::Data<KafkaProducer>,
-    kafka_cfg: web::Data<KafkaConfig>,
+    kafka_cfg: web::Data<KafkaConfig>
 ) -> impl Responder {
     let account_id = auth.id.clone();
 
@@ -2223,43 +2293,49 @@ pub async fn upgrade_tier2(
     };
 
     // ── Fetch BVN from kyc_verifications using the reference ──────────────────
-    let bvn: String = match sqlx::query_scalar!(
-        r#"
+    let bvn: String = match
+        sqlx
+            ::query_scalar!(
+                r#"
         SELECT value FROM kyc_verifications
         WHERE reference_id = $1
           AND status = true
           AND verification_type = 'bvn'
         LIMIT 1
         "#,
-        body.reference
-    )
-    .fetch_optional(db.get_ref())
-    .await
+                body.reference
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(Some(v))) => v,
         Ok(Some(None)) | Ok(None) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
+            return HttpResponse::BadRequest().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Invalid or expired BVN verification reference. Please complete BVN verification first."
-            }));
+            })
+            );
         }
         Err(e) => {
             eprintln!("[upgrade_tier2] KYC lookup error: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return HttpResponse::InternalServerError().json(
+                serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            }));
+            })
+            );
         }
     };
 
     // ── Fetch account fields ──────────────────────────────────────────────────
-    let row = match sqlx::query!(
-        "SELECT nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status
+    let row = match
+        sqlx
+            ::query!(
+                "SELECT nin, user_photo, phone_number, current_tier, pending_tier_upgrade, status
          FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_optional(db.get_ref())
-    .await
+                account_uuid
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -2332,7 +2408,6 @@ pub async fn upgrade_tier2(
         status: ResponseStatus::SUCCESS,
     })
 }
-
 
 pub async fn upgrade_tier3(
     auth: AuthUser,
@@ -2407,8 +2482,9 @@ pub async fn search_account(
             .filter(|a| a["id"].as_str() != Some(&auth.id))
             .collect()
     } else {
-        let results = sqlx::query!(
-            r#"
+        let results = sqlx
+            ::query!(
+                r#"
             SELECT
                 id, firstname, lastname, othername, phone_number,
                 email, account_number, account_name, account_type, current_tier
@@ -2426,10 +2502,10 @@ pub async fn search_account(
                 )
             LIMIT 11
             "#,
-            q,
-            like_q
-        )
-        .fetch_all(db.get_ref()).await;
+                q,
+                like_q
+            )
+            .fetch_all(db.get_ref()).await;
 
         match results {
             Ok(rows) => {
@@ -2441,11 +2517,11 @@ pub async fn search_account(
                             r.othername.as_deref().unwrap_or(""),
                             r.lastname.as_deref().unwrap_or(""),
                         ]
-                        .iter()
-                        .filter(|s: &&&str| !s.is_empty())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                            .iter()
+                            .filter(|s: &&&str| !s.is_empty())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" ");
 
                         serde_json::json!({
                             "id":             r.id,
@@ -2514,25 +2590,29 @@ pub async fn search_account(
                         .unwrap_or(0);
 
                     let limits = match tier {
-                        1 => serde_json::json!({
+                        1 =>
+                            serde_json::json!({
                             "tier":              1,
                             "single_deposit":    50_000,
                             "daily_transaction": 50_000,
                             "maximum_balance":   300_000,
                         }),
-                        2 => serde_json::json!({
+                        2 =>
+                            serde_json::json!({
                             "tier":              2,
                             "single_deposit":    200_000,
                             "daily_transaction": 200_000,
                             "maximum_balance":   500_000,
                         }),
-                        3 => serde_json::json!({
+                        3 =>
+                            serde_json::json!({
                             "tier":              3,
                             "single_deposit":    null,
                             "daily_transaction": null,
                             "maximum_balance":   null,
                         }),
-                        _ => serde_json::json!({
+                        _ =>
+                            serde_json::json!({
                             "tier":              0,
                             "single_deposit":    null,
                             "daily_transaction": null,
@@ -2542,6 +2622,33 @@ pub async fn search_account(
 
                     let mut wallet = wallet_data.clone();
                     wallet["limits"] = limits;
+                    let account_id_str = account["id"].as_str().unwrap_or("");
+
+                    if !account_id_str.is_empty() {
+                        let today = chrono::Utc::now().format("%Y-%m-%d");
+                        let daily_key = format!("daily_txn_total:{}:{}", account_id_str, today);
+                        let mut redis_daily = redis.get_ref().clone();
+
+                        let daily_total: f64 = redis
+                            ::cmd("GET")
+                            .arg(&daily_key)
+                            .query_async(&mut redis_daily).await
+                            .unwrap_or(None)
+                            .unwrap_or(0.0);
+
+                        let daily_limit: Option<f64> = match tier {
+                            1 => Some(50_000.0),
+                            2 => Some(200_000.0),
+                            _ => None,
+                        };
+
+                        let exceeded_limit = daily_limit.map(|limit| daily_total >= limit);
+
+                        wallet["daily_outgoing_total"] = serde_json::json!(daily_total);
+                        wallet["daily_limit"] = serde_json::json!(daily_limit);
+                        wallet["exceeded_limit"] = serde_json::json!(exceeded_limit);
+                    }
+
                     account["wallet"] = wallet;
                 }
             }
@@ -2591,11 +2698,13 @@ pub async fn set_payment_pin(
         }
     };
 
-    let row = match sqlx::query!(
-        "SELECT email, password_hash, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_optional(db.get_ref()).await
+    let row = match
+        sqlx
+            ::query!(
+                "SELECT email, password_hash, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+                account_uuid
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -2642,12 +2751,14 @@ pub async fn set_payment_pin(
         }
     };
 
-    if let Err(e) = sqlx::query!(
-        "UPDATE accounts SET pin_hash = $1, updated_at = NOW() WHERE id = $2",
-        pin_hash,
-        account_uuid
-    )
-    .execute(db.get_ref()).await
+    if
+        let Err(e) = sqlx
+            ::query!(
+                "UPDATE accounts SET pin_hash = $1, updated_at = NOW() WHERE id = $2",
+                pin_hash,
+                account_uuid
+            )
+            .execute(db.get_ref()).await
     {
         println!("[set_payment_pin] DB update error: {}", e);
         return HttpResponse::InternalServerError().json(ApiResponse {
@@ -2703,12 +2814,14 @@ pub async fn update_device_token(
         }
     };
 
-    match sqlx::query!(
-        "UPDATE accounts SET device_token = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
-        body.device_token,
-        account_uuid
-    )
-    .execute(db.get_ref()).await
+    match
+        sqlx
+            ::query!(
+                "UPDATE accounts SET device_token = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
+                body.device_token,
+                account_uuid
+            )
+            .execute(db.get_ref()).await
     {
         Ok(_) =>
             HttpResponse::Ok().json(ApiResponse {
@@ -2741,11 +2854,13 @@ pub async fn wallet_enquiry(
         }
     };
 
-    let row = match sqlx::query!(
-        "SELECT account_number, status FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-        account_uuid
-    )
-    .fetch_optional(db.get_ref()).await
+    let row = match
+        sqlx
+            ::query!(
+                "SELECT account_number, status FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+                account_uuid
+            )
+            .fetch_optional(db.get_ref()).await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -2825,25 +2940,29 @@ pub async fn wallet_enquiry(
     let tier = response["data"]["tier"].as_str().unwrap_or("0").parse::<i32>().unwrap_or(0);
 
     let limits = match tier {
-        1 => serde_json::json!({
+        1 =>
+            serde_json::json!({
             "tier":              1,
             "single_deposit":    50_000,
             "daily_transaction": 50_000,
             "maximum_balance":   300_000,
         }),
-        2 => serde_json::json!({
+        2 =>
+            serde_json::json!({
             "tier":              2,
             "single_deposit":    200_000,
             "daily_transaction": 200_000,
             "maximum_balance":   500_000,
         }),
-        3 => serde_json::json!({
+        3 =>
+            serde_json::json!({
             "tier":              3,
             "single_deposit":    null,
             "daily_transaction": null,
             "maximum_balance":   null,
         }),
-        _ => serde_json::json!({
+        _ =>
+            serde_json::json!({
             "tier":              0,
             "single_deposit":    null,
             "daily_transaction": null,
@@ -2861,3 +2980,4 @@ pub async fn wallet_enquiry(
     })
     )
 }
+

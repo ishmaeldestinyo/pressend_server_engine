@@ -46,35 +46,23 @@ pub async fn _9psb_webhook(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    log::warn!("[webhook] incoming event: {}", query.event);
-    log::warn!("[webhook] incoming Authorization header: {}", auth_header);
-    log::warn!("[webhook] incoming body: {:#?}", body);
-
     // ── Basic Auth Verification ──────────────────────────────────────────────
-    
-    let hardcoded_expected = "Basic YmxpbnFhcHA6QWJjZEAxMjM0IW5vdyQk";
-    
-    // We also calculate it from config as a backup
-    let config_token = base64::engine::general_purpose::STANDARD
-        .encode(format!("{}:{}", cfg.psb_webhook_username, cfg.psb_webhook_password));
-    let config_expected = format!("Basic {}", config_token);
 
+    let config_token = base64::engine::general_purpose::STANDARD
+    .encode(format!("{}:{}", cfg.psb_webhook_username, cfg.psb_webhook_password));
+
+    let config_expected = format!("Basic {}", config_token);
+    
     // Check if it matches either the hardcoded string OR the config
-    if auth_header.is_empty() || (auth_header != hardcoded_expected && auth_header != config_expected) {
-        log::warn!(
-            "[webhook] Auth Failure. Expected(Hardcoded): {} | Expected(Config): {} | Received: {}",
-            hardcoded_expected,
-            config_expected,
-            auth_header
-        );
-        
+    if auth_header.is_empty() || auth_header != config_expected {
+        log::warn!("[webhook] Auth Failure for event={}", query.event);
+
         return HttpResponse::Unauthorized().json(serde_json::json!({
             "success": false,
             "message": "Unauthorized"
         }));
     }
     // ─────────────────────────────────────────────────────────────────────────
-
     log::info!("[webhook] Auth Success for event={}", query.event);
 
     let ack = serde_json::json!({

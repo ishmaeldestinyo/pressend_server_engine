@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            kv.value                                            AS nin,\n            knd.first_name,\n            knd.middle_name,\n            knd.last_name,\n            knd.gender,\n            knd.date_of_birth::TEXT                             AS date_of_birth,\n            knd.image_url,\n            kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,\n            kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,\n            kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,\n            kv.raw_payload -> 'entity' ->> 'residence_State'            AS state\n        FROM kyc_verifications kv\n        INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id\n        WHERE kv.reference_id = $1\n          AND kv.status = true\n        LIMIT 1\n        ",
+  "query": "\n        SELECT\n            kv.value                                            AS nin,\n            knd.first_name,\n            knd.middle_name,\n            knd.last_name,\n            knd.gender,\n            knd.date_of_birth::TEXT                             AS date_of_birth,\n            knd.image_url,\n            knd.phone_number,\n            kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,\n            kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,\n            kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,\n            kv.raw_payload -> 'entity' ->> 'residence_State'            AS state\n        FROM kyc_verifications kv\n        INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id\n        WHERE kv.reference_id = $1\n          AND kv.status = true\n        LIMIT 1\n        ",
   "describe": {
     "columns": [
       {
@@ -40,21 +40,26 @@
       },
       {
         "ordinal": 7,
-        "name": "address",
+        "name": "phone_number",
         "type_info": "Text"
       },
       {
         "ordinal": 8,
-        "name": "city",
+        "name": "address",
         "type_info": "Text"
       },
       {
         "ordinal": 9,
-        "name": "lga",
+        "name": "city",
         "type_info": "Text"
       },
       {
         "ordinal": 10,
+        "name": "lga",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
         "name": "state",
         "type_info": "Text"
       }
@@ -72,11 +77,12 @@
       true,
       null,
       true,
+      true,
       null,
       null,
       null,
       null
     ]
   },
-  "hash": "1210306c268444b43bfd46fdaef5d7cb4eb9096174dea995a6b5299811bdea7a"
+  "hash": "9a517c39f9036e2368aefe035f2865a0059ab2ef8a50e09fa417c28bf8baa997"
 }

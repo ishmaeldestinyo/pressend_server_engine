@@ -21,7 +21,7 @@ serde_json = "1.0"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "uuid", "chrono", "migrate", "bigdecimal"] }
 actix-governor = "0.5"
 bigdecimal = { version = "0.4", features = ["serde"] }
-
+md5 = "0.7"
 dotenv = "0.15"
 dotenvy = "0.15"
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
@@ -36,7 +36,7 @@ lazy_static = "1"
 
 # For password hashing
 argon2 = "0.5"
-
+actix-ws = "0.3"
 # Jwt
 jsonwebtoken = "9"
 

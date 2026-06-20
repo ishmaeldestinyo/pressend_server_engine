@@ -47,9 +47,6 @@ pub struct SignupRequest {
     #[validate(email(message = "Invalid email format"))]
     pub email: String,
 
-    #[validate(length(min = 11, max = 11, message = "Phone number must be exactly 11 characters"))]
-    pub phone_no: String,
-
     #[validate(length(
         min = 8,
         message = "Device ID must be at least 8 characters long"

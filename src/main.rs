@@ -2,6 +2,7 @@ use actix_cors::Cors;
 use actix_web::{App, HttpResponse, HttpServer, web};
 use blinq_server::utils::mailer::Mailer;
 use blinq_server::utils::psb::PsbClient;
+use blinq_server::ws::phantom::{create_phantom_channel, phantom_ws};
 use blinq_server::utils::dojah::{Config as DojahConfig, DojahClient};
 use blinq_server::{config, db, kafka, modules, redis};
 use blinq_server::middlewares::governors::{strict_governor, mutating_governor};
@@ -52,6 +53,7 @@ async fn main() -> std::io::Result<()> {
     let kafka_cfg = web::Data::new(kafka_cfg_env);
     let db_pool = web::Data::new(db_pool_raw);
     let redis_data = web::Data::new(redis_raw);
+    let phantom_tx = web::Data::new(create_phantom_channel());
     let kafka_producer = web::Data::new(kafka_producer_raw);
 
     let strict_gov = web::Data::new(strict_governor());
@@ -90,6 +92,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(dojah.clone())
             .app_data(kafka_cfg.clone())
             .app_data(db_pool.clone())
+            .app_data(phantom_tx.clone())
             .app_data(http_client.clone())
             .app_data(redis_data.clone())
             .app_data(mailer.clone())
@@ -114,6 +117,7 @@ async fn main() -> std::io::Result<()> {
             )
             .service(
                 web::scope("/api")
+                    .route("/ws/phantom", web::get().to(phantom_ws))
                     .configure({
                         let s = strict_gov.clone();
                         let m = mutating_gov.clone();

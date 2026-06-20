@@ -12,13 +12,235 @@ use crate::{
         transaction_utils::{generate_reference, generate_vas_reference, get_grade, verify_pin},
     },
 };
-use actix_web::{HttpResponse, Responder, web};
+use actix_web::{HttpResponse, Responder, web::{self}};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use validator::Validate;
+use crate::utils::geo::{haversine_distance_km, PHANTOM_RADIUS_KM};
+
+
+const TTL_GRASP_INTENT: u64 = 300; // 5 minutes
+
 
 const TTL_1_MIN: u64 = 60;
 const TTL_24_HRS: u64 = 86_400;
+
+
+
+pub async fn phantom_receive(
+    auth: AuthUser,
+    body: web::Json<schemas::PhantomReceiveRequest>,
+    cfg: web::Data<crate::config::Config>,
+    client: web::Data<reqwest::Client>,
+    db: web::Data<PgPool>,
+    redis: web::Data<redis::aio::ConnectionManager>,
+) -> impl Responder {
+    if let Err(errors) = body.validate() {
+        return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
+            status: "error",
+            message: "Invalid input",
+            errors,
+        });
+    }
+
+    let creditor_uuid = match Uuid::parse_str(&auth.id) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Invalid token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let token = match auth.token {
+        Some(ref t) => t.clone(),
+        None => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Missing token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let mut redis_conn = redis.get_ref().clone();
+
+    // ── 1. Scan Redis for all grasp intents ───────────────────────────────────
+    let keys: Vec<String> = match redis::cmd("KEYS")
+        .arg("grasp_intent:*")
+        .query_async(&mut redis_conn)
+        .await
+    {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("[phantom-receive] Redis KEYS error: {e}");
+            return HttpResponse::InternalServerError().json(ApiResponse {
+                message: "Could not scan for nearby intents".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    if keys.is_empty() {
+        return HttpResponse::NotFound().json(ApiResponse {
+            message: "No active payment intents nearby".into(),
+            status: ResponseStatus::ERROR,
+        });
+    }
+
+    // ── 2. Filter by proximity ────────────────────────────────────────────────
+    let mut nearby: Vec<(String, f64, serde_json::Value)> = Vec::new();
+
+    for key in &keys {
+        let raw: Option<String> = match redis::cmd("GET")
+            .arg(key)
+            .query_async(&mut redis_conn)
+            .await
+        {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let raw = match raw { Some(r) => r, None => continue };
+
+        let intent: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let lat = intent["latitude"].as_f64().unwrap_or(0.0);
+        let lon = intent["longitude"].as_f64().unwrap_or(0.0);
+        let distance = haversine_distance_km(body.latitude, body.longitude, lat, lon);
+
+        if distance <= PHANTOM_RADIUS_KM {
+            let account_id = key.trim_start_matches("grasp_intent:").to_string();
+            if account_id != creditor_uuid.to_string() {
+                nearby.push((account_id, distance, intent));
+            }
+        }
+    }
+
+    if nearby.is_empty() {
+        return HttpResponse::NotFound().json(ApiResponse {
+            message: "No payment intents found within range".into(),
+            status: ResponseStatus::ERROR,
+        });
+    }
+
+    nearby.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // ── 3. Verify palm against each candidate ─────────────────────────────────
+    let verify_phantom_url = format!("{}/verify-phantom", cfg.palm_api_url);
+    let verify_payment_url = format!("{}/verify-payment", cfg.palm_api_url);
+
+    for (account_id, _, intent) in &nearby {
+        let phantom_payload = serde_json::json!({
+            "frames":               body.frames,
+            "candidate_account_id": account_id,
+        });
+
+        let match_body: serde_json::Value = match client
+            .post(&verify_phantom_url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .json(&phantom_payload)
+            .send()
+            .await
+        {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(e) => {
+                log::error!("[phantom-receive] verify-phantom error: {e}");
+                continue;
+            }
+        };
+
+        if match_body["matched"].as_bool() != Some(true) {
+            continue;
+        }
+
+        // ── Palm matched — fetch sender account number ────────────────────────
+        let sender_uuid = match Uuid::parse_str(account_id) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+
+        let sender = match sqlx::query!(
+            "SELECT account_number FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+            sender_uuid
+        )
+        .fetch_optional(db.get_ref())
+        .await
+        {
+            Ok(Some(r)) => r,
+            _ => continue,
+        };
+
+        let sender_account_number = sender.account_number.unwrap_or_default();
+        let amount = intent["amount"].as_f64().unwrap_or(0.0);
+
+        // ── Call verify-payment to execute transfer ────────────────────────────
+        let payment_payload = serde_json::json!({
+            "debit_account_number": sender_account_number,
+            "amount":               amount,
+            "frames":               body.frames,
+            "front_camera":         true,
+            "note":                 "Phantom payment",
+            "phantom":              true,
+        });
+
+        let payment_body: serde_json::Value = match client
+            .post(&verify_payment_url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .json(&payment_payload)
+            .send()
+            .await
+        {
+            Ok(r) => r.json().await.unwrap_or_default(),
+            Err(e) => {
+                log::error!("[phantom-receive] verify-payment error: {e}");
+                return HttpResponse::InternalServerError().json(ApiResponse {
+                    message: "Transfer failed".into(),
+                    status: ResponseStatus::ERROR,
+                });
+            }
+        };
+
+        let success = payment_body["success"].as_bool() == Some(true)
+            && payment_body["verified"].as_bool() == Some(true);
+
+        if !success {
+            return HttpResponse::BadRequest().json(ApiResponse {
+                message: payment_body["message"]
+                    .as_str()
+                    .unwrap_or("Payment could not be completed")
+                    .to_string(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+
+        // ── Delete Redis intent ───────────────────────────────────────────────
+        let _: Result<(), _> = redis::cmd("DEL")
+            .arg(format!("grasp_intent:{account_id}"))
+            .query_async(&mut redis_conn)
+            .await;
+
+        return HttpResponse::Ok().json(serde_json::json!({
+            "status":           "success",
+            "message":          "Phantom payment received",
+            "amount":           amount,
+            "reference":        payment_body["reference"],
+            "similarity_score": match_body["similarity_score"],
+        }));
+    }
+
+    HttpResponse::NotFound().json(ApiResponse {
+        message: "No matching palm found among nearby payment intents".into(),
+        status: ResponseStatus::ERROR,
+    })
+}
+
+
 
 pub async fn list_mytransaction(
     auth: AuthUser,
@@ -713,6 +935,80 @@ pub async fn external_transfer(
     HttpResponse::Ok().json(ApiResponse {
         message: "Your transfer is being processed. You will be notified once it is completed."
             .into(),
+        status: ResponseStatus::SUCCESS,
+    })
+}
+
+
+pub async fn payment_grasp_intent(
+    auth: AuthUser,
+    body: web::Json<schemas::GraspIntentRequest>,
+    redis: web::Data<redis::aio::ConnectionManager>,
+    phantom_tx: web::Data<crate::ws::phantom::PhantomTx>,
+) -> impl Responder {
+    if let Err(errors) = body.0.validate() {
+        return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
+            status: "error",
+            message: "Invalid input",
+            errors,
+        });
+    }
+
+    let account_uuid = match Uuid::parse_str(&auth.id) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::Unauthorized().json(ApiResponse {
+                message: "Invalid token".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+    };
+
+    let cache_key = format!("grasp_intent:{}", account_uuid);
+    let mut redis_conn = redis.get_ref().clone();
+
+    // ── Destroy any previous intent ───────────────────────────────────────────
+    let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+        .arg(&cache_key)
+        .query_async(&mut redis_conn)
+        .await;
+
+    let payload = serde_json::json!({
+        "amount":     body.amount,
+        "latitude":   body.latitude,
+        "longitude":  body.longitude,
+        "city":       body.city,
+        "state":      body.state,
+        "created_at": chrono::Utc::now(),
+    });
+
+    if let Err(e) = redis::cmd("SETEX")
+        .arg(&cache_key)
+        .arg(TTL_GRASP_INTENT)
+        .arg(payload.to_string())
+        .query_async::<_, ()>(&mut redis_conn)
+        .await
+    {
+        println!("[payment_grasp_intent] Redis error: {}", e);
+        return HttpResponse::InternalServerError().json(ApiResponse {
+            message: "Unable to process request at this time".into(),
+            status: ResponseStatus::ERROR,
+        });
+    }
+
+    // ── Broadcast to all connected HomeScreen users ───────────────────────────
+    let broadcast_payload = serde_json::json!({
+        "type":      "phantom_intent",
+        "latitude":  body.latitude,
+        "longitude": body.longitude,
+        "city":      body.city,
+        "state":     body.state,
+    }).to_string();
+
+    let _ = phantom_tx.send(broadcast_payload);
+
+    HttpResponse::Ok().json(ApiResponse {
+        message: "Intent captured".into(),
         status: ResponseStatus::SUCCESS,
     })
 }

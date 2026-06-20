@@ -20,6 +20,17 @@ pub struct PsbWalletTxQuery {
     pub number_of_items:  Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Validate)]
+pub struct PhantomReceiveRequest {
+    #[validate(range(min = -90.0, max = 90.0, message = "Invalid latitude"))]
+    pub latitude:  f64,
+
+    #[validate(range(min = -180.0, max = 180.0, message = "Invalid longitude"))]
+    pub longitude: f64,
+
+    #[validate(length(min = 1, message = "At least one frame required"))]
+    pub frames: Vec<String>,
+}
 
 // ── Response shapes (shared) ──────────────────────────────────────────────────
 #[derive(Debug, Serialize)]
@@ -27,6 +38,24 @@ pub struct BankResolveResponse {
     pub account_number: String,
     pub account_name: String,
     pub bank_code: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Validate)]
+pub struct GraspIntentRequest {
+    #[validate(range(min = 1.0, message = "Amount must be greater than 0"))]
+    pub amount: f64,
+
+    #[validate(range(min = -90.0, max = 90.0, message = "Invalid latitude"))]
+    pub latitude: f64,
+
+    #[validate(range(min = -180.0, max = 180.0, message = "Invalid longitude"))]
+    pub longitude: f64,
+
+    #[validate(length(min = 1, max = 100, message = "City is required"))]
+    pub city: String,
+
+    #[validate(length(min = 1, max = 100, message = "State is required"))]
+    pub state: String,
 }
 
 

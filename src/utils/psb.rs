@@ -27,6 +27,7 @@ impl PsbClient {
 
     // ── Authenticate ──────────────────────────────────────────────────────────
     async fn authenticate(&self) -> Result<serde_json::Value, String> {
+
         let res = self.client
             .post(format!("{}/waas/api/v1/authenticate", self.base_url))
             .json(&serde_json::json!({
@@ -39,9 +40,9 @@ impl PsbClient {
             .await
             .map_err(|e| format!("Auth HTTP error: {}", e))?;
 
-        res.json::<serde_json::Value>()
-            .await
-            .map_err(|e| format!("Auth parse error: {}", e))
+        let body = res.text().await.map_err(|e| format!("Auth read error: {}", e))?;
+
+        serde_json::from_str(&body).map_err(|e| format!("Auth parse error: {}", e))
     }
 
     // ── Refresh token ─────────────────────────────────────────────────────────
@@ -127,8 +128,10 @@ impl PsbClient {
             }
         }
 
+
         // ── Full authentication ───────────────────────────────────────────────
         let data = self.authenticate().await?;
+
         let token = data["accessToken"]
             .as_str()
             .ok_or("No accessToken in auth response")?
@@ -158,7 +161,6 @@ impl PsbClient {
 
         // ── If 401 — invalidate token and retry once ──────────────────────────
         if res.status() == 401 {
-            println!("[psb] 401 received — invalidating token and retrying");
             let _ = redis::cmd("DEL")
                 .arg(WAAS_ACCESS_TOKEN_KEY)
                 .query_async::<_, ()>(redis)
