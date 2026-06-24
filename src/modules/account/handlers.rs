@@ -298,27 +298,41 @@ pub async fn signup(
         state:         String,
     }
 
-    // ── Try NIN first ─────────────────────────────────────────────────────────
-    let nin_row = sqlx::query!(
+    // ── Single query — NIN or BVN, whichever exists ───────────────────────────
+    let kyc_row = sqlx::query!(
         r#"
         SELECT
-            kv.value                                                    AS id_value,
-            knd.first_name,
-            knd.middle_name,
-            knd.last_name,
-            knd.gender,
-            knd.date_of_birth::TEXT                                     AS date_of_birth,
-            knd.image_url,
-            knd.phone_number,
-            kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,
-            kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,
-            kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,
-            kv.raw_payload -> 'entity' ->> 'residence_State'            AS state
+            kv.value                                                            AS id_value,
+            kv.id_type                                                          AS id_type,
+            COALESCE(knd.first_name,  kbd.first_name)                          AS first_name,
+            COALESCE(knd.middle_name, kbd.middle_name)                         AS middle_name,
+            COALESCE(knd.last_name,   kbd.last_name)                           AS last_name,
+            COALESCE(knd.gender,      kbd.gender)                              AS gender,
+            COALESCE(knd.date_of_birth::TEXT, kbd.date_of_birth::TEXT)         AS date_of_birth,
+            COALESCE(knd.phone_number, kbd.phone_number)                       AS phone_number,
+            COALESCE(knd.image_url,   kbd.image_url)                           AS image_url,
+            CASE
+                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'
+                ELSE kv.raw_payload -> 'entity' ->> 'residentialAddress'
+            END AS address,
+            CASE
+                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Town'
+                ELSE kv.raw_payload -> 'entity' ->> 'lgaOfResidence'
+            END AS city,
+            CASE
+                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Lga'
+                ELSE kv.raw_payload -> 'entity' ->> 'lgaOfResidence'
+            END AS lga,
+            CASE
+                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_State'
+                ELSE kv.raw_payload -> 'entity' ->> 'stateOfResidence'
+            END AS state
         FROM kyc_verifications kv
-        INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id
+        LEFT JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id AND kv.id_type = 'NIN'
+        LEFT JOIN kyc_bvn_data kbd ON kbd.kyc_verification_id = kv.id AND kv.id_type = 'BVN'
         WHERE kv.reference_id = $1
           AND kv.status = true
-          AND kv.id_type = 'NIN'
+          AND kv.id_type IN ('NIN', 'BVN')
         LIMIT 1
         "#,
         body.reference
@@ -326,43 +340,10 @@ pub async fn signup(
     .fetch_optional(db.get_ref())
     .await;
 
-    // ── Try BVN only if NIN not found ─────────────────────────────────────────
-    let bvn_row = if matches!(&nin_row, Ok(None)) {
-        sqlx::query!(
-            r#"
-            SELECT
-                kv.value                                                        AS id_value,
-                kbd.first_name,
-                kbd.middle_name,
-                kbd.last_name,
-                kbd.gender,
-                kbd.date_of_birth::TEXT                                         AS date_of_birth,
-                kbd.image_url,
-                kbd.phone_number,
-                kv.raw_payload -> 'entity' ->> 'residentialAddress'            AS address,
-                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS city,
-                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS lga,
-                kv.raw_payload -> 'entity' ->> 'stateOfResidence'              AS state
-            FROM kyc_verifications kv
-            INNER JOIN kyc_bvn_data kbd ON kbd.kyc_verification_id = kv.id
-            WHERE kv.reference_id = $1
-              AND kv.status = true
-              AND kv.id_type = 'BVN'
-            LIMIT 1
-            "#,
-            body.reference
-        )
-        .fetch_optional(db.get_ref())
-        .await
-    } else {
-        Ok(None)
-    };
-
-    // ── Resolve whichever came back ───────────────────────────────────────────
-    let identity = match (nin_row, bvn_row) {
-        (Ok(Some(row)), _) => ResolvedIdentity {
+    let identity = match kyc_row {
+        Ok(Some(row)) => ResolvedIdentity {
             id_value:      row.id_value.unwrap_or_default(),
-            id_type:       "NIN".into(),
+            id_type:       row.id_type,
             first_name:    row.first_name.unwrap_or_default(),
             middle_name:   row.middle_name.unwrap_or_default(),
             last_name:     row.last_name.unwrap_or_default(),
@@ -375,32 +356,18 @@ pub async fn signup(
             lga:           row.lga.unwrap_or_default(),
             state:         row.state.unwrap_or_default(),
         },
-        (_, Ok(Some(row))) => ResolvedIdentity {
-            id_value:      row.id_value.unwrap_or_default(),
-            id_type:       "BVN".into(),
-            first_name:    row.first_name.unwrap_or_default(),
-            middle_name:   row.middle_name.unwrap_or_default(),
-            last_name:     row.last_name.unwrap_or_default(),
-            gender:        row.gender.unwrap_or_default(),
-            date_of_birth: row.date_of_birth.unwrap_or_default(),
-            phone_number:  row.phone_number.unwrap_or_default(),
-            image_url:     row.image_url.unwrap_or_default(),
-            address:       row.address.unwrap_or_default(),
-            city:          row.city.unwrap_or_default(),
-            lga:           row.lga.unwrap_or_default(),
-            state:         row.state.unwrap_or_default(),
-        },
-        (Err(e), _) | (_, Err(e)) => {
+        Ok(None) => {
+            eprintln!("[signup] KYC not found for reference: {}", body.reference);
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Invalid or expired signup reference. Please complete NIN or BVN verification first."
+            }));
+        }
+        Err(e) => {
             eprintln!("[signup] KYC lookup error: {:?}", e);
             return HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            }));
-        }
-        (Ok(None), Ok(None)) => {
-            return HttpResponse::BadRequest().json(serde_json::json!({
-                "status": "error",
-                "message": "Invalid or expired signup reference. Please complete NIN or BVN verification first."
             }));
         }
     };
@@ -526,7 +493,6 @@ pub async fn signup(
         status: ResponseStatus::SUCCESS,
     })
 }
-
 
 
 pub async fn send_otp(
