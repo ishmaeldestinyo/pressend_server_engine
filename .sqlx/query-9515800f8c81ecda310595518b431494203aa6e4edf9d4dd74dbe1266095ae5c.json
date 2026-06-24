@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE vas_transactions\n                               SET status           = 'failed',\n                                   response_message = $1,\n                                   updated_at       = NOW()\n                               WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9515800f8c81ecda310595518b431494203aa6e4edf9d4dd74dbe1266095ae5c"
+}

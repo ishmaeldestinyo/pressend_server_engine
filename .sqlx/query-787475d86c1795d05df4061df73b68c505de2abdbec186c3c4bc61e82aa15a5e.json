@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            status,\n            email,\n            nin,\n            email_verified\n        FROM accounts\n        WHERE email = $1 OR nin = $2\n        LIMIT 1\n        ",
+  "query": "\n        SELECT\n            status,\n            email,\n            nin,\n            bvn,\n            email_verified\n        FROM accounts\n        WHERE email = $1\n           OR (nin = $2 AND $3 = 'NIN')\n           OR (bvn = $2 AND $3 = 'BVN')\n        LIMIT 1\n        ",
   "describe": {
     "columns": [
       {
@@ -20,12 +20,18 @@
       },
       {
         "ordinal": 3,
+        "name": "bvn",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
         "name": "email_verified",
         "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text",
         "Text"
       ]
@@ -34,8 +40,9 @@
       false,
       false,
       true,
+      true,
       false
     ]
   },
-  "hash": "c5daf5b6ea84296093454d62be26c2f9242c05fabb23fda6967e91615f2fca67"
+  "hash": "787475d86c1795d05df4061df73b68c505de2abdbec186c3c4bc61e82aa15a5e"
 }

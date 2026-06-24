@@ -264,7 +264,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
 }
 
 
-
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -282,18 +281,33 @@ pub async fn signup(
 
     let mut _redis_conn = redis.get_ref().clone();
 
-    // ── Fetch NIN + identity details from kyc tables (webhook already stored this) ──
-    let kyc = match
-        sqlx
-            ::query!(
-                r#"
+    // ── Resolved identity from either NIN or BVN ─────────────────────────────
+    struct ResolvedIdentity {
+        id_value:      String,
+        id_type:       String,
+        first_name:    String,
+        middle_name:   String,
+        last_name:     String,
+        gender:        String,
+        date_of_birth: String,
+        phone_number:  String,
+        image_url:     String,
+        address:       String,
+        city:          String,
+        lga:           String,
+        state:         String,
+    }
+
+    // ── Try NIN first ─────────────────────────────────────────────────────────
+    let nin_row = sqlx::query!(
+        r#"
         SELECT
-            kv.value                                            AS nin,
+            kv.value                                                    AS id_value,
             knd.first_name,
             knd.middle_name,
             knd.last_name,
             knd.gender,
-            knd.date_of_birth::TEXT                             AS date_of_birth,
+            knd.date_of_birth::TEXT                                     AS date_of_birth,
             knd.image_url,
             knd.phone_number,
             kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,
@@ -304,102 +318,151 @@ pub async fn signup(
         INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id
         WHERE kv.reference_id = $1
           AND kv.status = true
+          AND kv.id_type = 'NIN'
         LIMIT 1
         "#,
-                body.reference
-            )
-            .fetch_optional(db.get_ref()).await
-    {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return HttpResponse::BadRequest().json(
-                serde_json::json!({
-                "status": "error",
-                "message": "Invalid or expired signup reference. Please complete NIN verification first."
-            })
-            );
-        }
-        Err(e) => {
+        body.reference
+    )
+    .fetch_optional(db.get_ref())
+    .await;
+
+    // ── Try BVN only if NIN not found ─────────────────────────────────────────
+    let bvn_row = if matches!(&nin_row, Ok(None)) {
+        sqlx::query!(
+            r#"
+            SELECT
+                kv.value                                                        AS id_value,
+                kbd.first_name,
+                kbd.middle_name,
+                kbd.last_name,
+                kbd.gender,
+                kbd.date_of_birth::TEXT                                         AS date_of_birth,
+                kbd.image_url,
+                kbd.phone_number,
+                kv.raw_payload -> 'entity' ->> 'residentialAddress'            AS address,
+                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS city,
+                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS lga,
+                kv.raw_payload -> 'entity' ->> 'stateOfResidence'              AS state
+            FROM kyc_verifications kv
+            INNER JOIN kyc_bvn_data kbd ON kbd.kyc_verification_id = kv.id
+            WHERE kv.reference_id = $1
+              AND kv.status = true
+              AND kv.id_type = 'BVN'
+            LIMIT 1
+            "#,
+            body.reference
+        )
+        .fetch_optional(db.get_ref())
+        .await
+    } else {
+        Ok(None)
+    };
+
+    // ── Resolve whichever came back ───────────────────────────────────────────
+    let identity = match (nin_row, bvn_row) {
+        (Ok(Some(row)), _) => ResolvedIdentity {
+            id_value:      row.id_value.unwrap_or_default(),
+            id_type:       "NIN".into(),
+            first_name:    row.first_name.unwrap_or_default(),
+            middle_name:   row.middle_name.unwrap_or_default(),
+            last_name:     row.last_name.unwrap_or_default(),
+            gender:        row.gender.unwrap_or_default(),
+            date_of_birth: row.date_of_birth.unwrap_or_default(),
+            phone_number:  row.phone_number.unwrap_or_default(),
+            image_url:     row.image_url.unwrap_or_default(),
+            address:       row.address.unwrap_or_default(),
+            city:          row.city.unwrap_or_default(),
+            lga:           row.lga.unwrap_or_default(),
+            state:         row.state.unwrap_or_default(),
+        },
+        (_, Ok(Some(row))) => ResolvedIdentity {
+            id_value:      row.id_value.unwrap_or_default(),
+            id_type:       "BVN".into(),
+            first_name:    row.first_name.unwrap_or_default(),
+            middle_name:   row.middle_name.unwrap_or_default(),
+            last_name:     row.last_name.unwrap_or_default(),
+            gender:        row.gender.unwrap_or_default(),
+            date_of_birth: row.date_of_birth.unwrap_or_default(),
+            phone_number:  row.phone_number.unwrap_or_default(),
+            image_url:     row.image_url.unwrap_or_default(),
+            address:       row.address.unwrap_or_default(),
+            city:          row.city.unwrap_or_default(),
+            lga:           row.lga.unwrap_or_default(),
+            state:         row.state.unwrap_or_default(),
+        },
+        (Err(e), _) | (_, Err(e)) => {
             eprintln!("[signup] KYC lookup error: {:?}", e);
-            return HttpResponse::InternalServerError().json(
-                serde_json::json!({
+            return HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            })
-            );
+            }));
         }
-    };
-
-    let nin = kyc.nin.clone();
-
-    let nin_value = match nin.clone() {
-        Some(v) => v,
-        None => {
-            return HttpResponse::BadRequest().json(
-                serde_json::json!({
+        (Ok(None), Ok(None)) => {
+            return HttpResponse::BadRequest().json(serde_json::json!({
                 "status": "error",
-                "message": "NIN value missing from verification record."
-            })
-            );
+                "message": "Invalid or expired signup reference. Please complete NIN or BVN verification first."
+            }));
         }
     };
 
-    // ── Resolve referral code → referrer_id ──────────────────────────
+    // ── Resolve referral code → referrer_id ──────────────────────────────────
     let referrer_id: Option<String> = if let Some(code) = &body.referral_code {
-        match
-            sqlx
-                ::query_scalar!(
-                    "SELECT id::TEXT FROM accounts WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1",
-                    code
-                )
-                .fetch_optional(db.get_ref()).await
+        match sqlx::query_scalar!(
+            "SELECT id::TEXT FROM accounts WHERE referral_code = $1 AND deleted_at IS NULL LIMIT 1",
+            code
+        )
+        .fetch_optional(db.get_ref())
+        .await
         {
             Ok(Some(id)) => id,
             Ok(None) => {
-                return HttpResponse::BadRequest().json(
-                    serde_json::json!({
+                return HttpResponse::BadRequest().json(serde_json::json!({
                     "status": "error",
                     "message": "Invalid referral code"
-                })
-                );
+                }));
             }
             Err(e) => {
                 eprintln!("[signup] referral code lookup error: {:?}", e);
-                return HttpResponse::InternalServerError().json(
-                    serde_json::json!({
+                return HttpResponse::InternalServerError().json(serde_json::json!({
                     "status": "error",
                     "message": "Something went wrong. Please try again."
-                })
-                );
+                }));
             }
         }
     } else {
         None
     };
 
-    // ── Single query to check all duplicates at once ──────────────────
-        let existing = sqlx::query!(
+    // ── Single query to check all duplicates at once ──────────────────────────
+    let existing = sqlx::query!(
         r#"
         SELECT
             status,
             email,
             nin,
+            bvn,
             email_verified
         FROM accounts
-        WHERE email = $1 OR nin = $2
+        WHERE email = $1
+           OR (nin = $2 AND $3 = 'NIN')
+           OR (bvn = $2 AND $3 = 'BVN')
         LIMIT 1
         "#,
         body.email,
-        nin
+        identity.id_value,
+        identity.id_type
     )
-    .fetch_optional(db.get_ref()).await;
+    .fetch_optional(db.get_ref())
+    .await;
 
     match existing {
         Ok(Some(row)) => {
             let conflict_message = if row.email == body.email {
                 "An account with this email already exists"
-            } else {
+            } else if identity.id_type == "NIN" {
                 "An account with this NIN already exists"
+            } else {
+                "An account with this BVN already exists"
             };
 
             if !row.email_verified {
@@ -416,46 +479,43 @@ pub async fn signup(
                 });
             }
 
-            return HttpResponse::Conflict().json(
-                serde_json::json!({
+            return HttpResponse::Conflict().json(serde_json::json!({
                 "status": "error",
                 "message": conflict_message
-            })
-            );
+            }));
         }
         Ok(None) => {}
         Err(e) => {
             eprintln!("[signup] DB error: {:?}", e);
-            return HttpResponse::InternalServerError().json(
-                serde_json::json!({
+            return HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Something went wrong. Please try again."
-            })
-            );
+            }));
         }
     }
 
-    // ── Build and publish signup event ────────────────────────────────
+    // ── Build and publish signup event ────────────────────────────────────────
     let otp_redis_key = format!("{}.verify.otp", body.email);
 
     let event = SignupEvent {
-        email: body.email.clone(),
-        password: body.password.clone(),
-        device_id: body.device_id.clone(),
-        account_type: body.account_type.to_string(),
+        email:         body.email.clone(),
+        password:      body.password.clone(),
+        device_id:     body.device_id.clone(),
+        account_type:  body.account_type.to_string(),
         otp_redis_key,
-        nin: nin_value,
-        firstname: kyc.first_name.unwrap_or_default(),
-        middlename: kyc.middle_name.unwrap_or_default(),
-        lastname: kyc.last_name.unwrap_or_default(),
-        gender: kyc.gender.unwrap_or_default(),
-        date_of_birth: kyc.date_of_birth.unwrap_or_default(),
-        mobile_number: kyc.phone_number.unwrap_or_default(),
-        user_photo: kyc.image_url.unwrap_or_default(),
-        address: kyc.address.unwrap_or_default(),
-        city: kyc.city.unwrap_or_default(),
-        lga: kyc.lga.unwrap_or_default(),
-        state: kyc.state.unwrap_or_default(),
+        nin:           if identity.id_type == "NIN" { Some(identity.id_value.clone()) } else { None },
+        bvn:           if identity.id_type == "BVN" { Some(identity.id_value.clone()) } else { None },
+        firstname:     identity.first_name,
+        middlename:    identity.middle_name,
+        lastname:      identity.last_name,
+        gender:        identity.gender,
+        date_of_birth: identity.date_of_birth,
+        mobile_number: identity.phone_number,
+        user_photo:    identity.image_url,
+        address:       identity.address,
+        city:          identity.city,
+        lga:           identity.lga,
+        state:         identity.state,
         referrer_id,
     };
 
@@ -466,6 +526,8 @@ pub async fn signup(
         status: ResponseStatus::SUCCESS,
     })
 }
+
+
 
 pub async fn send_otp(
     body: web::Json<schemas::SendOTPRequest>,

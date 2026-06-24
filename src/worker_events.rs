@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{ Serialize, Deserialize };
 
 #[derive(Serialize, Deserialize)]
 pub struct SignupEvent {
@@ -9,7 +9,8 @@ pub struct SignupEvent {
     pub address: String,
     pub otp_redis_key: String,
     // from dojah NIN lookup
-    pub nin: String,
+    pub nin: Option<String>,
+    pub bvn: Option<String>,
     pub firstname: String,
     pub lastname: String,
     pub middlename: String,
@@ -23,11 +24,11 @@ pub struct SignupEvent {
     pub referrer_id: Option<String>,
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct VerifyEmailEvent {
     pub email: String,
 }
+
 
 #[derive(Serialize, Deserialize)]
 pub struct SendOTPEvent {
@@ -83,7 +84,6 @@ pub struct AccountLoggedInNotificationEvent {
     pub firstname: String,
     pub ip: String,
     pub email: String,
-
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,12 +94,11 @@ pub struct ChangeEmailEvent {
     pub firstname: String,
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct KycUpgradeStatusEvent {
     pub account_id: String,
     pub status: String,
-    pub tier: i16,  
+    pub tier: i16,
     pub account_number: Option<String>,
     pub account_name: Option<String>,
     pub message: Option<String>,
@@ -134,30 +133,27 @@ pub struct Tier3UpgradeEvent {
     pub proof_of_address: String,
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetPaymentPinEvent {
     pub account_id: String,
-    pub email:      String,
-    pub firstname:  String,
+    pub email: String,
+    pub firstname: String,
 }
-
 
 #[derive(Debug, Serialize)]
 pub struct DebitPalmCharge {
     pub account_id: String,
 }
 
-
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct InboundTransferEvent {
-    pub session_id:        String,  // nipsessionid — idempotency key
-    pub transaction_ref:   String,
-    pub amount:            String,
-    pub account_number:    String,  
-    pub sender_name:       String,
-    pub sender_account:    String,
-    pub sender_bank:       String,
-    pub narration:         String,
-    pub status:         Option<String>,
+    pub session_id: String, // nipsessionid — idempotency key
+    pub transaction_ref: String,
+    pub amount: String,
+    pub account_number: String,
+    pub sender_name: String,
+    pub sender_account: String,
+    pub sender_bank: String,
+    pub narration: String,
+    pub status: Option<String>,
 }

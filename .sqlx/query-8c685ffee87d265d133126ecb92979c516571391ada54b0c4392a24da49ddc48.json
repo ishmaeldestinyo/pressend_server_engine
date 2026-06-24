@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            kv.value                                            AS nin,\n            knd.first_name,\n            knd.middle_name,\n            knd.last_name,\n            knd.gender,\n            knd.date_of_birth::TEXT                             AS date_of_birth,\n            knd.image_url,\n            knd.phone_number,\n            kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'   AS address,\n            kv.raw_payload -> 'entity' ->> 'residence_Town'             AS city,\n            kv.raw_payload -> 'entity' ->> 'residence_Lga'              AS lga,\n            kv.raw_payload -> 'entity' ->> 'residence_State'            AS state\n        FROM kyc_verifications kv\n        INNER JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id\n        WHERE kv.reference_id = $1\n          AND kv.status = true\n        LIMIT 1\n        ",
+  "query": "\n            SELECT\n                kv.value                                                        AS id_value,\n                kbd.first_name,\n                kbd.middle_name,\n                kbd.last_name,\n                kbd.gender,\n                kbd.date_of_birth::TEXT                                         AS date_of_birth,\n                kbd.image_url,\n                kbd.phone_number,\n                kv.raw_payload -> 'entity' ->> 'residentialAddress'            AS address,\n                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS city,\n                kv.raw_payload -> 'entity' ->> 'lgaOfResidence'                AS lga,\n                kv.raw_payload -> 'entity' ->> 'stateOfResidence'              AS state\n            FROM kyc_verifications kv\n            INNER JOIN kyc_bvn_data kbd ON kbd.kyc_verification_id = kv.id\n            WHERE kv.reference_id = $1\n              AND kv.status = true\n              AND kv.id_type = 'BVN'\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "nin",
+        "name": "id_value",
         "type_info": "Text"
       },
       {
@@ -84,5 +84,5 @@
       null
     ]
   },
-  "hash": "9a517c39f9036e2368aefe035f2865a0059ab2ef8a50e09fa417c28bf8baa997"
+  "hash": "8c685ffee87d265d133126ecb92979c516571391ada54b0c4392a24da49ddc48"
 }

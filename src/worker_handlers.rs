@@ -37,6 +37,7 @@ use sqlx::PgPool;
 use std::str::FromStr;
 use uuid::Uuid;
 
+
 pub async fn handle_signup(
     payload: &str,
     db: &PgPool,
@@ -93,7 +94,6 @@ pub async fn handle_signup(
             };
 
             // ── 3. Open 9PSB wallet BEFORE insert ────────────────────────────
-            // Declared here — never Uuid::nil(), always a real UUID
             let new_id = Uuid::new_v4();
 
             let gender_code = match event.gender.to_uppercase().as_str() {
@@ -114,8 +114,8 @@ pub async fn handle_signup(
                 }
             };
 
-            let open_wallet_body =
-                serde_json::json!({
+            // ── supply NIN or BVN — whichever was used during KYC ────────────
+            let mut open_wallet_body = serde_json::json!({
                 "transactionTrackingRef": new_id.to_string(),
                 "lastName":               event.lastname,
                 "otherNames":             other_names,
@@ -123,9 +123,14 @@ pub async fn handle_signup(
                 "gender":                 gender_code,
                 "dateOfBirth":            date_of_birth,
                 "address":                event.address,
-                "nationalIdentityNo":     event.nin,
                 "email":                  event.email,
             });
+
+            if let Some(ref nin) = event.nin {
+                open_wallet_body["nationalIdentityNo"] = serde_json::json!(nin);
+            } else if let Some(ref bvn) = event.bvn {
+                open_wallet_body["bvn"] = serde_json::json!(bvn);
+            }
 
             println!(
                 "[worker/signup] 9PSB request body: {}",
@@ -165,7 +170,7 @@ pub async fn handle_signup(
             }
 
             let account_number = json["data"]["accountNumber"].as_str().unwrap_or("").to_string();
-            let account_name = json["data"]["fullName"].as_str().unwrap_or("").to_string();
+            let account_name   = json["data"]["fullName"].as_str().unwrap_or("").to_string();
 
             if account_number.is_empty() {
                 println!("[worker/signup] accountNumber empty in 9PSB response");
@@ -173,13 +178,12 @@ pub async fn handle_signup(
             }
 
             // ── 4. Single insert with everything ─────────────────────────────
-            let result = sqlx
-                ::query!(
-                    r#"
+            let result = sqlx::query!(
+                r#"
                 INSERT INTO accounts (
                     id, email, password_hash, device_id, account_type,
                     firstname, lastname, othername, phone_number,
-                    date_of_birth, gender, nin, address,
+                    date_of_birth, gender, nin, bvn, address,
                     account_number, account_name, bank_name,
                     city, lga, state, user_photo,
                     current_tier, tier_upgraded_at,
@@ -189,43 +193,43 @@ pub async fn handle_signup(
                 VALUES (
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9,
-                    $10, $11, $12, $13,
-                    $14, $15, $16,
-                    $17, $18, $19, $20,
+                    $10, $11, $12, $13, $14,
+                    $15, $16, $17,
+                    $18, $19, $20, $21,
                     1, NOW(),
-                    'active', false, $21, $22
+                    'active', false, $22, $23
                 )
                 ON CONFLICT (email) DO NOTHING
                 RETURNING id
                 "#,
-                    new_id,
-                    event.email,
-                    password_hash,
-                    event.device_id,
-                    event.account_type,
-                    event.firstname,
-                    event.lastname,
-                    event.middlename,
-                    event.mobile_number,
-                    event.date_of_birth,
-                    event.gender,
-                    event.nin,
-                    event.address,
-                    account_number,
-                    account_name,
-                    "9PSB",
-                    event.city,
-                    event.lga,
-                    event.state,
-                    event.user_photo,
-                    referral_code,
-                    event.referrer_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
-                )
-                .fetch_optional(db).await;
+                new_id,
+                event.email,
+                password_hash,
+                event.device_id,
+                event.account_type,
+                event.firstname,
+                event.lastname,
+                event.middlename,
+                event.mobile_number,
+                event.date_of_birth,
+                event.gender,
+                event.nin.as_deref(),           // None if BVN was used
+                event.bvn.as_deref(),           // None if NIN was used
+                event.address,
+                account_number,
+                account_name,
+                "9PSB",
+                event.city,
+                event.lga,
+                event.state,
+                event.user_photo,
+                referral_code,
+                event.referrer_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+            )
+            .fetch_optional(db).await;
 
             match result {
                 Ok(Some(row)) => {
-                    // freshly inserted — use the returned id
                     account_id = row.id;
                     println!(
                         "[worker/signup] Account created with wallet — email: {}, account_number: {}",
@@ -234,12 +238,11 @@ pub async fn handle_signup(
                     );
                 }
                 Ok(None) => {
-                    // ON CONFLICT DO NOTHING fired — row already existed,
-                    // fetch its real id so the referral insert below is correct
-                    match
-                        sqlx
-                            ::query_scalar!("SELECT id FROM accounts WHERE email = $1", event.email)
-                            .fetch_one(db).await
+                    match sqlx::query_scalar!(
+                        "SELECT id FROM accounts WHERE email = $1",
+                        event.email
+                    )
+                    .fetch_one(db).await
                     {
                         Ok(id) => {
                             account_id = id;
@@ -259,21 +262,18 @@ pub async fn handle_signup(
     }
 
     // ── 5. Insert referral row if referred ───────────────────────────────────
-    // account_id is always a real UUID here — never Uuid::nil()
     if let Some(referrer_id_str) = &event.referrer_id {
         if let Ok(referrer_uuid) = Uuid::parse_str(referrer_id_str) {
-            if
-                let Err(e) = sqlx
-                    ::query!(
-                        r#"
+            if let Err(e) = sqlx::query!(
+                r#"
                 INSERT INTO referrals (referrer_id, referred_id, status)
                 VALUES ($1, $2, 'pending')
                 ON CONFLICT (referred_id) DO NOTHING
                 "#,
-                        referrer_uuid,
-                        account_id // ← always the real id, never nil
-                    )
-                    .execute(db).await
+                referrer_uuid,
+                account_id
+            )
+            .execute(db).await
             {
                 eprintln!("[worker/signup] referral insert error: {}", e);
             } else {
@@ -299,13 +299,11 @@ pub async fn handle_signup(
 
     // ── 7. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
     let mut redis_conn = redis.clone();
-    match
-        redis
-            ::cmd("SETEX")
-            .arg(&event.otp_redis_key)
-            .arg(600u64)
-            .arg(&otp_hash)
-            .query_async::<_, ()>(&mut redis_conn).await
+    match redis::cmd("SETEX")
+        .arg(&event.otp_redis_key)
+        .arg(600u64)
+        .arg(&otp_hash)
+        .query_async::<_, ()>(&mut redis_conn).await
     {
         Ok(_) => {
             println!("[worker/signup] OTP stored in Redis: {}", event.otp_redis_key);
@@ -323,6 +321,8 @@ pub async fn handle_signup(
         println!("[worker/signup] OTP email sent to: {}", event.email);
     }
 }
+
+
 
 pub async fn handle_resend_otp(
     payload: &str,
