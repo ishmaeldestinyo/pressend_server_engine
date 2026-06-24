@@ -802,8 +802,6 @@ pub async fn data_purchase(
 
 
 
-
-
 pub async fn get_bill_categories(
     cfg: web::Data<Config>,
     redis: web::Data<redis::aio::ConnectionManager>,
@@ -1222,7 +1220,8 @@ pub async fn bills_payment(
     let amount_bd = bigdecimal::BigDecimal::from_str(&body.amount).unwrap_or_default();
 
     let item_id = body.item_id.clone().unwrap_or_default();
-    let customer_phone = body.customer_phone.clone().unwrap_or_default();
+    let customer_phone = body.customer_phone.clone().unwrap_or_else(|| "08012345678".to_string());
+    
     let other_field = body.other_field.clone().unwrap_or_default();
 
     // ── 5. Detect vas_type from biller_id ─────────────────────────────────────
@@ -1239,7 +1238,7 @@ pub async fn bills_payment(
         "customerId":           body.customer_id,
         "billerId":             body.biller_id,
         "itemId":               item_id,
-        "customerPhone":        customer_phone,
+        "phone":        customer_phone,
         "customerName":         body.customer_name,
         "otherField":           other_field,
         "amount":               body.amount,
