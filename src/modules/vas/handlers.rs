@@ -1238,7 +1238,7 @@ pub async fn bills_payment(
         "customerId":           body.customer_id,
         "billerId":             body.biller_id,
         "itemId":               item_id,
-        "phone":        customer_phone,
+        "customerPhone":        customer_phone,
         "customerName":         body.customer_name,
         "otherField":           other_field,
         "amount":               body.amount,
