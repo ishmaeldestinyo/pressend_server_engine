@@ -467,12 +467,12 @@ pub async fn get_my_vas_transactions(
 
     let rows = builder.build().fetch_all(db.get_ref()).await;
 
-    let transactions = match rows {
+    let mut transactions = match rows {
         Ok(rows) => rows
             .iter()
             .map(|r| {
                 serde_json::json!({
-                    "id":               r.get::<uuid::Uuid, _>("id"),
+                    "id":               r.get::<uuid::Uuid, _>("id").to_string(),
                     "vas_type":         r.get::<String, _>("vas_type"),
                     "network":          r.get::<Option<String>, _>("network"),
                     "provider":         r.get::<Option<String>, _>("provider"),
@@ -506,13 +506,138 @@ pub async fn get_my_vas_transactions(
         });
     }
 
+    // ── Refetch status ONLY for pending transactions ───────────────────────────
+    let vas_base_url = std::env::var("VAS_BASE_URL").unwrap_or_default();
+    let http_client  = reqwest::Client::new();
+
+    for tx in transactions.iter_mut() {
+        let current_status = tx["status"].as_str().unwrap_or("").to_lowercase();
+
+        // only pending needs a recheck — success and failed are terminal
+        if current_status != "pending" {
+            continue;
+        }
+
+        let reference = match tx["reference"].as_str() {
+            Some(r) => r.to_string(),
+            None    => continue,
+        };
+
+        let url = format!(
+            "{}/billspayment/status?transReference={}",
+            vas_base_url, reference
+        );
+
+        match http_client.get(&url).send().await {
+            Ok(resp) => {
+                // 404 = VAS doesn't recognise this reference at all, mark failed
+                if resp.status().as_u16() == 404 {
+                    log::warn!(
+                        "[get_my_vas_transactions] VAS 404 for ref: {}",
+                        reference
+                    );
+
+                    tx["status"]           = serde_json::json!("failed");
+                    tx["response_message"] = serde_json::json!("Invalid transaction reference");
+
+                    if let Some(id) = tx["id"].as_str().and_then(|i| Uuid::parse_str(i).ok()) {
+                        let _ = sqlx::query!(
+                            r#"UPDATE vas_transactions
+                               SET status           = 'failed',
+                                   response_message = $1,
+                                   updated_at       = NOW()
+                               WHERE id = $2"#,
+                            "Invalid transaction reference",
+                            id
+                        )
+                        .execute(db.get_ref())
+                        .await;
+                    }
+
+                    continue;
+                }
+
+                if resp.status().is_success() {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(body) => {
+                            let vas_status = body
+                                .get("data")
+                                .and_then(|d| d.get("transactionStatus"))
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("pending")
+                                .to_lowercase();
+
+                            let description = body
+                                .get("data")
+                                .and_then(|d| d.get("description"))
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("");
+
+                            // normalize to match DB CHECK ('pending', 'success', 'failed')
+                            let normalized_status = match vas_status.as_str() {
+                                "success" => "success",
+                                "failed"  => "failed",
+                                _         => "pending",
+                            };
+
+                            // update response in-place
+                            tx["status"]           = serde_json::json!(normalized_status);
+                            tx["response_message"] = serde_json::json!(description);
+
+                            // only write to DB if status actually changed from pending
+                            if normalized_status != "pending" {
+                                if let Some(id) = tx["id"].as_str().and_then(|i| Uuid::parse_str(i).ok()) {
+                                    let _ = sqlx::query!(
+                                        r#"UPDATE vas_transactions
+                                           SET status           = $1,
+                                               response_message = $2,
+                                               updated_at       = NOW()
+                                           WHERE id = $3"#,
+                                        normalized_status,
+                                        description,
+                                        id
+                                    )
+                                    .execute(db.get_ref())
+                                    .await;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[get_my_vas_transactions] failed to parse VAS body for ref {}: {}",
+                                reference, e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "[get_my_vas_transactions] VAS status call failed for ref {}: {}",
+                    reference, e
+                );
+            }
+        }
+    }
+
+    // ── Cache after statuses are refreshed ───────────────────────────────────
     let data = serde_json::json!({ "transactions": transactions });
+
+    let _ = redis::cmd("SET")
+        .arg(&cache_key)
+        .arg(data.to_string())
+        .arg("EX")
+        .arg(60u64) // short TTL so pending ones get rechecked often
+        .query_async::<_, ()>(&mut redis_conn)
+        .await;
 
     HttpResponse::Ok().json(serde_json::json!({
         "status": "success",
         "data":   data
     }))
 }
+
+
 
 pub async fn get_data_plans(
     cfg: web::Data<Config>,
