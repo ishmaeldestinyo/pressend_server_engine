@@ -41,6 +41,7 @@ pub fn config(
             // --- READ ROUTES ---
             .route("/search", web::get().to(handlers::search_account))
             .route("/me", web::get().to(handlers::get_user_info))
+            .route("/supported-countries", web::get().to(handlers::fetch_supported_countries))
             .route("/palm", web::get().to(handlers::get_palm))
             .route("/palm/status", web::get().to(handlers::get_panic_status))
             .route("/wallet-enquiry", web::get().to(handlers::wallet_enquiry)),

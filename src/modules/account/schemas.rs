@@ -58,9 +58,15 @@ pub struct SignupRequest {
     #[validate(custom(function = "validate_password"))]
     pub password: String,
 
-    pub reference: String, // nin reference
+    pub reference: String, // dojah reference
 
     pub referral_code: Option<String>,
+
+    // #[validate(length(min = 2, max = 10, message = "Invalid international country code"))]
+    // pub intl_country_code: Option<String>, // e.g. "+233"
+
+    // #[validate(length(min = 2, max = 100, message = "Invalid country name"))]
+    // pub country_name: Option<String>, // e.g. "ghana"
 }
 
 
@@ -86,6 +92,15 @@ pub struct VerifyOTPRequest {
 pub struct RefreshTokenRequest {
     #[validate(length(min = 1, message = "Refresh token is required"))]
     pub refresh_token: String,
+}
+
+#[derive(Serialize)]
+pub struct Country {
+    pub name: &'static str,
+    pub short_name: &'static str,
+    pub symbol: &'static str,
+    pub currency_code: &'static str,
+    pub country_code: &'static str,
 }
 
 #[derive(Deserialize, Serialize, Validate)]

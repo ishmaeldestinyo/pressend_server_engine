@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::config::KafkaConfig;
 use crate::kafka::KafkaProducer;
 use crate::modules::account::schemas;
+use crate::modules::account::schemas::Country;
 use redis::aio::ConnectionManager;
 use crate::modules::account::schemas::UpdateDeviceTokenRequest;
 use crate::utils::jwt::{ AuthUser, generate_access_token, generate_refresh_token, verify_token };
@@ -36,19 +37,10 @@ use validator::Validate;
 use serde_json::Value;
 
 pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> impl Responder {
-    println!("DOJAH WEBHOOK BODY: {:#?}", body);
 
     let body = body.into_inner();
 
     let verification_status = body["verification_status"].as_str().unwrap_or("");
-    if verification_status != "Completed" {
-        return HttpResponse::Ok().json(
-            serde_json::json!({
-            "status": "success",
-            "message": "Acknowledged"
-        })
-        );
-    }
 
     let reference_id = match body["reference_id"].as_str() {
         Some(r) => r.to_string(),
@@ -1650,6 +1642,48 @@ pub async fn delete_palm(
         }
     }
 }
+
+pub async fn fetch_supported_countries() -> impl Responder {
+    let countries: Vec<Country> = vec![
+        // ── Explicitly supported ──
+        Country { name: "Ghana", short_name: "GH", symbol: "₵", currency_code: "GHS", country_code: "+233" },
+        Country { name: "Senegal", short_name: "SN", symbol: "CFA", currency_code: "XOF", country_code: "+221" },
+        Country { name: "Tanzania", short_name: "TZ", symbol: "TSh", currency_code: "TZS", country_code: "+255" },
+        Country { name: "Kenya", short_name: "KE", symbol: "KSh", currency_code: "KES", country_code: "+254" },
+        Country { name: "Cameroon", short_name: "CM", symbol: "CFA", currency_code: "XAF", country_code: "+237" },
+        Country { name: "Ethiopia", short_name: "ET", symbol: "Br", currency_code: "ETB", country_code: "+251" },
+        Country { name: "Rwanda", short_name: "RW", symbol: "Fr", currency_code: "RWF", country_code: "+250" },
+        Country { name: "Zambia", short_name: "ZM", symbol: "ZK", currency_code: "ZMW", country_code: "+260" },
+        Country { name: "Cote d'Ivoire", short_name: "CI", symbol: "CFA", currency_code: "XOF", country_code: "+225" },
+        // ── Francophone Africa ──
+        Country { name: "Mali", short_name: "ML", symbol: "CFA", currency_code: "XOF", country_code: "+223" },
+        Country { name: "Burkina Faso", short_name: "BF", symbol: "CFA", currency_code: "XOF", country_code: "+226" },
+        Country { name: "Niger", short_name: "NE", symbol: "CFA", currency_code: "XOF", country_code: "+227" },
+        Country { name: "Guinea", short_name: "GN", symbol: "Fr", currency_code: "GNF", country_code: "+224" },
+        Country { name: "Benin", short_name: "BJ", symbol: "CFA", currency_code: "XOF", country_code: "+229" },
+        Country { name: "Togo", short_name: "TG", symbol: "CFA", currency_code: "XOF", country_code: "+228" },
+        Country { name: "Chad", short_name: "TD", symbol: "CFA", currency_code: "XAF", country_code: "+235" },
+        Country { name: "Central African Republic", short_name: "CF", symbol: "CFA", currency_code: "XAF", country_code: "+236" },
+        Country { name: "Republic of the Congo", short_name: "CG", symbol: "CFA", currency_code: "XAF", country_code: "+242" },
+        Country { name: "Democratic Republic of the Congo", short_name: "CD", symbol: "FC", currency_code: "CDF", country_code: "+243" },
+        Country { name: "Gabon", short_name: "GA", symbol: "CFA", currency_code: "XAF", country_code: "+241" },
+        Country { name: "Equatorial Guinea", short_name: "GQ", symbol: "CFA", currency_code: "XAF", country_code: "+240" },
+        Country { name: "Madagascar", short_name: "MG", symbol: "Ar", currency_code: "MGA", country_code: "+261" },
+        Country { name: "Mauritius", short_name: "MU", symbol: "₨", currency_code: "MUR", country_code: "+230" },
+        Country { name: "Seychelles", short_name: "SC", symbol: "₨", currency_code: "SCR", country_code: "+248" },
+        Country { name: "Comoros", short_name: "KM", symbol: "Fr", currency_code: "KMF", country_code: "+269" },
+        Country { name: "Djibouti", short_name: "DJ", symbol: "Fr", currency_code: "DJF", country_code: "+253" },
+        Country { name: "Burundi", short_name: "BI", symbol: "Fr", currency_code: "BIF", country_code: "+257" },
+        Country { name: "Guinea-Bissau", short_name: "GW", symbol: "CFA", currency_code: "XOF", country_code: "+245" },
+        Country { name: "Mauritania", short_name: "MR", symbol: "UM", currency_code: "MRU", country_code: "+222" },
+        Country { name: "Morocco", short_name: "MA", symbol: "د.م.", currency_code: "MAD", country_code: "+212" },
+        Country { name: "Algeria", short_name: "DZ", symbol: "د.ج", currency_code: "DZD", country_code: "+213" },
+        Country { name: "Tunisia", short_name: "TN", symbol: "د.ت", currency_code: "TND", country_code: "+216" },
+    ];
+
+    HttpResponse::Ok().json(countries)
+}
+
 
 pub async fn get_palm(auth: AuthUser, cfg: web::Data<crate::config::Config>) -> impl Responder {
     let token = match auth.token {
