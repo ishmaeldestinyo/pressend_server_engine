@@ -37,7 +37,6 @@ use sqlx::PgPool;
 use std::str::FromStr;
 use uuid::Uuid;
 
-
 pub async fn handle_signup(
     payload: &str,
     db: &PgPool,
@@ -64,7 +63,7 @@ pub async fn handle_signup(
 
     // ── 1. Check if email already exists ─────────────────────────────────────
     let existing = sqlx
-        ::query!("SELECT id, email_verified FROM accounts WHERE email = $1", event.email)
+        ::query("SELECT id, email_verified FROM accounts WHERE email = $1", event.email)
         .fetch_optional(db).await;
 
     // account_id is set in one of two ways below and used for the referral insert
@@ -115,7 +114,8 @@ pub async fn handle_signup(
             };
 
             // ── supply NIN or BVN — whichever was used during KYC ────────────
-            let mut open_wallet_body = serde_json::json!({
+            let mut open_wallet_body =
+                serde_json::json!({
                 "transactionTrackingRef": new_id.to_string(),
                 "lastName":               event.lastname,
                 "otherNames":             other_names,
@@ -170,7 +170,7 @@ pub async fn handle_signup(
             }
 
             let account_number = json["data"]["accountNumber"].as_str().unwrap_or("").to_string();
-            let account_name   = json["data"]["fullName"].as_str().unwrap_or("").to_string();
+            let account_name = json["data"]["fullName"].as_str().unwrap_or("").to_string();
 
             if account_number.is_empty() {
                 println!("[worker/signup] accountNumber empty in 9PSB response");
@@ -178,8 +178,9 @@ pub async fn handle_signup(
             }
 
             // ── 4. Single insert with everything ─────────────────────────────
-            let result = sqlx::query!(
-                r#"
+            let result = sqlx
+                ::query(
+                    r#"
                 INSERT INTO accounts (
                     id, email, password_hash, device_id, account_type,
                     firstname, lastname, othername, phone_number,
@@ -202,31 +203,31 @@ pub async fn handle_signup(
                 ON CONFLICT (email) DO NOTHING
                 RETURNING id
                 "#,
-                new_id,
-                event.email,
-                password_hash,
-                event.device_id,
-                event.account_type,
-                event.firstname,
-                event.lastname,
-                event.middlename,
-                event.mobile_number,
-                event.date_of_birth,
-                event.gender,
-                event.nin.as_deref(),           // None if BVN was used
-                event.bvn.as_deref(),           // None if NIN was used
-                event.address,
-                account_number,
-                account_name,
-                "9PSB",
-                event.city,
-                event.lga,
-                event.state,
-                event.user_photo,
-                referral_code,
-                event.referrer_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
-            )
-            .fetch_optional(db).await;
+                    new_id,
+                    event.email,
+                    password_hash,
+                    event.device_id,
+                    event.account_type,
+                    event.firstname,
+                    event.lastname,
+                    event.middlename,
+                    event.mobile_number,
+                    event.date_of_birth,
+                    event.gender,
+                    event.nin.as_deref(), // None if BVN was used
+                    event.bvn.as_deref(), // None if NIN was used
+                    event.address,
+                    account_number,
+                    account_name,
+                    "9PSB",
+                    event.city,
+                    event.lga,
+                    event.state,
+                    event.user_photo,
+                    referral_code,
+                    event.referrer_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+                )
+                .fetch_optional(db).await;
 
             match result {
                 Ok(Some(row)) => {
@@ -238,11 +239,10 @@ pub async fn handle_signup(
                     );
                 }
                 Ok(None) => {
-                    match sqlx::query_scalar!(
-                        "SELECT id FROM accounts WHERE email = $1",
-                        event.email
-                    )
-                    .fetch_one(db).await
+                    match
+                        sqlx
+                            ::query_scalar("SELECT id FROM accounts WHERE email = $1", event.email)
+                            .fetch_one(db).await
                     {
                         Ok(id) => {
                             account_id = id;
@@ -264,16 +264,18 @@ pub async fn handle_signup(
     // ── 5. Insert referral row if referred ───────────────────────────────────
     if let Some(referrer_id_str) = &event.referrer_id {
         if let Ok(referrer_uuid) = Uuid::parse_str(referrer_id_str) {
-            if let Err(e) = sqlx::query!(
-                r#"
+            if
+                let Err(e) = sqlx
+                    ::query(
+                        r#"
                 INSERT INTO referrals (referrer_id, referred_id, status)
                 VALUES ($1, $2, 'pending')
                 ON CONFLICT (referred_id) DO NOTHING
                 "#,
-                referrer_uuid,
-                account_id
-            )
-            .execute(db).await
+                        referrer_uuid,
+                        account_id
+                    )
+                    .execute(db).await
             {
                 eprintln!("[worker/signup] referral insert error: {}", e);
             } else {
@@ -299,11 +301,13 @@ pub async fn handle_signup(
 
     // ── 7. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
     let mut redis_conn = redis.clone();
-    match redis::cmd("SETEX")
-        .arg(&event.otp_redis_key)
-        .arg(600u64)
-        .arg(&otp_hash)
-        .query_async::<_, ()>(&mut redis_conn).await
+    match
+        redis
+            ::cmd("SETEX")
+            .arg(&event.otp_redis_key)
+            .arg(600u64)
+            .arg(&otp_hash)
+            .query_async::<_, ()>(&mut redis_conn).await
     {
         Ok(_) => {
             println!("[worker/signup] OTP stored in Redis: {}", event.otp_redis_key);
@@ -375,7 +379,7 @@ pub async fn handle_resend_otp(
 
 pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
     let result = sqlx
-        ::query!(
+        ::query(
             r#"
         UPDATE referrals
         SET
@@ -408,7 +412,7 @@ pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
         Ok(r) if r.rows_affected() > 0 => {
             // check if they just qualified (not disqualified)
             let status = sqlx
-                ::query_scalar!("SELECT status FROM referrals WHERE referred_id = $1", account_uuid)
+                ::query_scalar("SELECT status FROM referrals WHERE referred_id = $1", account_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten();
@@ -433,7 +437,7 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     // Get this user's referrer
     let referrer_id = match
         sqlx
-            ::query_scalar!("SELECT referrer_id FROM referrals WHERE referred_id = $1", account_uuid)
+            ::query_scalar("SELECT referrer_id FROM referrals WHERE referred_id = $1", account_uuid)
             .fetch_optional(db).await
     {
         Ok(Some(id)) => id,
@@ -445,7 +449,7 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     // Count unrewarded qualified referrals in batches of 5
     let count = match
         sqlx
-            ::query_scalar!(
+            ::query_scalar(
                 r#"
         SELECT COUNT(*) FROM referrals
         WHERE referrer_id = $1
@@ -477,7 +481,7 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
 
     // Lock and mark exactly 5 rows
     let marked = sqlx
-        ::query!(
+        ::query(
             r#"
         UPDATE referrals
         SET rewarded    = true,
@@ -518,7 +522,7 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     // Insert reward row
     if
         let Err(e) = sqlx
-            ::query!(
+            ::query(
                 r#"
         INSERT INTO referral_rewards (referrer_id, amount, currency, referral_count, status)
         VALUES ($1, 1000, 'NGN', 5, 'pending')
@@ -549,7 +553,7 @@ pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
 
     match
         sqlx
-            ::query!("UPDATE accounts SET email_verified = true WHERE email = $1", event.email)
+            ::query("UPDATE accounts SET email_verified = true WHERE email = $1", event.email)
             .execute(db).await
     {
         Ok(_) => {
@@ -600,14 +604,14 @@ pub async fn handle_change_password(payload: &str, db: &PgPool, mailer: &Mailer)
     // ── Update password + insert contact history concurrently ─────────────────
     let (update, history): (Result<_, sqlx::Error>, Result<_, sqlx::Error>) = tokio::join!(
         sqlx
-            ::query!(
+            ::query(
                 "UPDATE accounts SET password_hash = $1, updated_at = NOW() WHERE id = $2",
                 new_hash,
                 account_uuid
             )
             .execute(db),
         sqlx
-            ::query!(
+            ::query(
                 r#"INSERT INTO account_contact_history
                (account_id, field, old_value, new_value, changed_at)
                VALUES ($1, 'password', '[hashed]', '[hashed]', NOW())
@@ -653,7 +657,7 @@ pub async fn handle_delete_account(payload: &str, db: &PgPool, mailer: &Mailer) 
 
     // ── Soft delete account ───────────────────────────────────────────────────
     let update = sqlx
-        ::query!(
+        ::query(
             r#"UPDATE accounts
            SET deleted_at = NOW(),
                deleted_reason = $1,
@@ -743,7 +747,7 @@ pub async fn handle_device_update(payload: &str, db: &PgPool) {
     };
 
     let result = sqlx
-        ::query!(
+        ::query(
             "UPDATE accounts SET device_id = $1, updated_at = NOW() WHERE id = $2",
             event.new_device_id,
             account_uuid
@@ -800,14 +804,14 @@ pub async fn handle_change_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
     ) = tokio::join!(
         sqlx
-            ::query!(
+            ::query(
                 "UPDATE accounts SET email = $1, updated_at = NOW() WHERE id = $2",
                 event.new_email,
                 account_uuid
             )
             .execute(db),
         sqlx
-            ::query!(
+            ::query(
                 r#"INSERT INTO account_contact_history
        (account_id, field, old_value, new_value, changed_at)
        VALUES ($1, 'email', $2, $3, NOW())
@@ -861,7 +865,7 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
     // ── Fetch account for email + firstname ───────────────────────────────────
     let row = match
         sqlx
-            ::query!(
+            ::query(
                 "SELECT email, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
                 account_uuid
             )
@@ -885,7 +889,7 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
         // Postgres evaluates all RHS values before applying writes,
         // so current_tier = pending_tier_upgrade safely captures the old value.
         let result = sqlx
-            ::query!(
+            ::query(
                 r#"UPDATE accounts SET
                 current_tier              = pending_tier_upgrade,
                 pending_tier_upgrade      = NULL,
@@ -923,7 +927,7 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
     } else {
         // ── Rejected — clear both pending fields ──────────────────────────────
         let result = sqlx
-            ::query!(
+            ::query(
                 r#"UPDATE accounts SET
                 pending_tier_upgrade      = NULL,
                 tier_upgrade_requested_at = NULL,
@@ -982,7 +986,7 @@ pub async fn handle_tier2_upgrade(
     // ── Fetch account ─────────────────────────────────────────────────────────
     let row = match
         sqlx
-            ::query!(
+            ::query(
                 "SELECT current_tier, status, pending_tier_upgrade, email, account_number, account_name FROM accounts WHERE id = $1 AND deleted_at IS NULL",
                 account_uuid
             )
@@ -1070,7 +1074,7 @@ pub async fn handle_tier2_upgrade(
     // ── Set pending ───────────────────────────────────────────────────────────
     if
         let Err(e) = sqlx
-            ::query!(
+            ::query(
                 r#"UPDATE accounts SET
             pending_tier_upgrade = 2,
             tier_upgrade_requested_at = NOW(),
@@ -1150,7 +1154,7 @@ pub async fn handle_tier2_upgrade(
                 eprintln!("[worker/tier2_upgrade] wallet_upgrade rejected: {:?}", json);
                 // clear pending so user can retry
                 let _ = sqlx
-                    ::query!(
+                    ::query(
                         "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
                         account_uuid
                     )
@@ -1189,7 +1193,7 @@ pub async fn handle_tier3_upgrade(
     // ── Fetch account ─────────────────────────────────────────────────────────
     let row = match
         sqlx
-            ::query!(
+            ::query(
                 "SELECT current_tier, status, pending_tier_upgrade, email,
                 account_number, account_name, bvn, nin
          FROM accounts WHERE id = $1 AND deleted_at IS NULL",
@@ -1252,7 +1256,7 @@ pub async fn handle_tier3_upgrade(
     // ── Set pending ───────────────────────────────────────────────────────────
     if
         let Err(e) = sqlx
-            ::query!(
+            ::query(
                 r#"UPDATE accounts SET
             pending_tier_upgrade = 3,
             tier_upgrade_requested_at = NOW(),
@@ -1296,7 +1300,7 @@ pub async fn handle_tier3_upgrade(
             } else {
                 println!("[worker/tier3_upgrade] wallet_upgrade rejected: {:?}", json);
                 let _ = sqlx
-                    ::query!(
+                    ::query(
                         "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
                         account_uuid
                     )
@@ -1306,7 +1310,7 @@ pub async fn handle_tier3_upgrade(
         Err(e) => {
             println!("[worker/tier3_upgrade] wallet_upgrade error: {}", e);
             let _ = sqlx
-                ::query!(
+                ::query(
                     "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
                     account_uuid
                 )
@@ -1335,7 +1339,7 @@ pub async fn handle_legacy_beneficiary_added(payload: &str, db: &PgPool, mailer:
     // ── Fetch owner name once ─────────────────────────────────────────────────
     let owner = match
         sqlx
-            ::query!(
+            ::query(
                 "SELECT firstname, lastname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
                 account_uuid
             )
@@ -1397,7 +1401,7 @@ pub async fn handle_legacy_beneficiary_deleted(payload: &str, db: &PgPool, maile
     // ── Fetch owner name once ─────────────────────────────────────────────────
     let owner = match
         sqlx
-            ::query!("SELECT firstname, lastname FROM accounts WHERE id = $1", account_uuid)
+            ::query("SELECT firstname, lastname FROM accounts WHERE id = $1", account_uuid)
             .fetch_optional(db).await
     {
         Ok(Some(r)) => r,
@@ -1563,7 +1567,7 @@ pub async fn handle_internal_transfer(
                 );
                 // ── Notify sender only — credit failed so reciever gets nothing ─
                 let sender_token = sqlx
-                    ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
+                    ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
                     .fetch_optional(db).await
                     .ok()
                     .flatten()
@@ -1667,11 +1671,11 @@ pub async fn handle_internal_transfer(
     // ── 5. Push notification — sender only ────────────────────────────────────
     // Receiver credit alert is handled by  via PSB webhook
     let sender_info = sqlx
-        ::query!("SELECT device_token, firstname, lastname FROM accounts WHERE id = $1", sender_uuid)
+        ::query("SELECT device_token, firstname, lastname FROM accounts WHERE id = $1", sender_uuid)
         .fetch_optional(db).await;
 
     let reciever_info = sqlx
-        ::query!("SELECT firstname, lastname FROM accounts WHERE id = $1", reciever_uuid)
+        ::query("SELECT firstname, lastname FROM accounts WHERE id = $1", reciever_uuid)
         .fetch_optional(db).await;
 
     // ── Build recipient display name for sender notification ──────────────────
@@ -1744,7 +1748,7 @@ pub async fn handle_transfer_inflow(
 
     // ── Check if transactionref already exists in our system ─────────────────
     let existing = sqlx
-        ::query!("SELECT id, status FROM transactions WHERE reference = $1", event.transaction_ref)
+        ::query("SELECT id, status FROM transactions WHERE reference = $1", event.transaction_ref)
         .fetch_optional(db).await
         .unwrap_or(None);
 
@@ -1763,7 +1767,7 @@ pub async fn handle_transfer_inflow(
 
         // ── Status actually changed — update only, no notification ────────────
         let update = sqlx
-            ::query!(
+            ::query(
                 r#"
             UPDATE transactions
             SET
@@ -1805,7 +1809,7 @@ pub async fn handle_transfer_inflow(
     // ── transactionref not found — external inbound transfer ──────────────────
     let receiver = match
         sqlx
-            ::query!(
+            ::query(
                 r#"
         SELECT id, device_token, account_type, account_name
         FROM accounts
@@ -1831,7 +1835,7 @@ pub async fn handle_transfer_inflow(
 
     // ── Insert external inflow as credit transaction ───────────────────────────
     let result = sqlx
-        ::query!(
+        ::query(
             r#"
         INSERT INTO transactions (
             sender_id,
@@ -1900,7 +1904,7 @@ pub async fn handle_transfer_inflow(
         // ── Guard: skip entirely if fee was already processed (prevents double
         //    notification when the webhook is delivered more than once) ─────────
         let fee_exists = sqlx
-            ::query!("SELECT id FROM transactions WHERE reference = $1", fee_ref)
+            ::query("SELECT id FROM transactions WHERE reference = $1", fee_ref)
             .fetch_optional(db).await
             .unwrap_or(None);
 
@@ -1935,7 +1939,7 @@ pub async fn handle_transfer_inflow(
                             format!("Processed fee for ₦35 of {} credit alert greater than 10,000", receiver_name);
 
                         let _: Result<_, _> = sqlx
-                            ::query!(
+                            ::query(
                                 r#"
                             INSERT INTO transactions (
                                 sender_id,
@@ -2082,7 +2086,7 @@ async fn insert_transaction(
     let amount_bd = bigdecimal::BigDecimal::from_str(amount).unwrap_or_default();
 
     sqlx
-        ::query!(
+        ::query(
             r#"
         INSERT INTO transactions
             (sender_id, reciever_id, reference, type, amount, currency, narration, status, channel)
@@ -2192,7 +2196,7 @@ pub async fn handle_external_transfer(
 
             // ── Record transaction ────────────────────────────────────────────
             let _ = sqlx
-                ::query!(
+                ::query(
                     r#"
                 INSERT INTO transactions
                     (sender_id, reciever_id, reference, type, amount, currency,
@@ -2258,7 +2262,7 @@ pub async fn handle_external_transfer(
 
             // ── Push notification ─────────────────────────────────────────────
             let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
+                ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten()
@@ -2349,7 +2353,7 @@ pub async fn handle_airtime_purchase(
 
             // ── Save to vas_transactions ──────────────────────────────────────
             let _ = sqlx
-                ::query!(
+                ::query(
                     r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
@@ -2385,7 +2389,7 @@ pub async fn handle_airtime_purchase(
 
             // ── Push notification ─────────────────────────────────────────────
             let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
+                ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten()
@@ -2447,7 +2451,7 @@ pub async fn handle_airtime_purchase(
 
             // ── Save failed attempt ───────────────────────────────────────────
             let _ = sqlx
-                ::query!(
+                ::query(
                     r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
@@ -2469,7 +2473,7 @@ pub async fn handle_airtime_purchase(
 
             // ── Push notification — failed ─────────────────────────────────────
             let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
+                ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten()
@@ -2544,7 +2548,7 @@ pub async fn handle_data_purchase(
 
             // ── Save to vas_transactions ──────────────────────────────────────
             let _ = sqlx
-                ::query!(
+                ::query(
                     r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
@@ -2581,7 +2585,7 @@ pub async fn handle_data_purchase(
             }
             // ── Push notification ─────────────────────────────────────────────
             let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
+                ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten()
@@ -2631,7 +2635,7 @@ pub async fn handle_data_purchase(
         Err(e) => {
             // ── Save failed attempt ───────────────────────────────────────────
             let _ = sqlx
-                ::query!(
+                ::query(
                     r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
@@ -2653,7 +2657,7 @@ pub async fn handle_data_purchase(
 
             // ── Push notification — failed ─────────────────────────────────────
             let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
+                ::query_scalar("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
                 .fetch_optional(db).await
                 .ok()
                 .flatten()

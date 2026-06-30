@@ -3,6 +3,8 @@ use crate::config::KafkaConfig;
 use crate::kafka::KafkaProducer;
 use crate::modules::account::schemas;
 use crate::modules::account::schemas::Country;
+use crate::utils::dojah;
+use crate::utils::dojah::DojahClient;
 use redis::aio::ConnectionManager;
 use crate::modules::account::schemas::UpdateDeviceTokenRequest;
 use crate::utils::jwt::{ AuthUser, generate_access_token, generate_refresh_token, verify_token };
@@ -41,6 +43,14 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
     let body = body.into_inner();
 
     let verification_status = body["verification_status"].as_str().unwrap_or("");
+    // if verification_status != "Completed" {
+    //     return HttpResponse::Ok().json(
+    //         serde_json::json!({
+    //         "status": "success",
+    //         "message": "Acknowledged"
+    //     })
+    //     );
+    // }
 
     let reference_id = match body["reference_id"].as_str() {
         Some(r) => r.to_string(),
@@ -261,6 +271,7 @@ pub async fn signup(
     kafka: web::Data<KafkaProducer>,
     kafka_cfg: web::Data<KafkaConfig>,
     redis: web::Data<ConnectionManager>,
+    dojah: web::Data<DojahClient>,
     db: web::Data<PgPool>
 ) -> impl Responder {
     if let Err(errors) = body.0.validate() {
@@ -273,7 +284,6 @@ pub async fn signup(
 
     let mut _redis_conn = redis.get_ref().clone();
 
-    // ── Resolved identity from either NIN or BVN ─────────────────────────────
     struct ResolvedIdentity {
         id_value:      String,
         id_type:       String,
@@ -290,79 +300,117 @@ pub async fn signup(
         state:         String,
     }
 
-    // ── Single query — NIN or BVN, whichever exists ───────────────────────────
-    let kyc_row = sqlx::query!(
-        r#"
-        SELECT
-            kv.value                                                            AS id_value,
-            kv.id_type                                                          AS id_type,
-            COALESCE(knd.first_name,  kbd.first_name)                          AS first_name,
-            COALESCE(knd.middle_name, kbd.middle_name)                         AS middle_name,
-            COALESCE(knd.last_name,   kbd.last_name)                           AS last_name,
-            COALESCE(knd.gender,      kbd.gender)                              AS gender,
-            COALESCE(knd.date_of_birth::TEXT, kbd.date_of_birth::TEXT)         AS date_of_birth,
-            COALESCE(knd.phone_number, kbd.phone_number)                       AS phone_number,
-            COALESCE(knd.image_url,   kbd.image_url)                           AS image_url,
-            CASE
-                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Address_Line1'
-                ELSE kv.raw_payload -> 'entity' ->> 'residentialAddress'
-            END AS address,
-            CASE
-                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Town'
-                ELSE kv.raw_payload -> 'entity' ->> 'lgaOfResidence'
-            END AS city,
-            CASE
-                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_Lga'
-                ELSE kv.raw_payload -> 'entity' ->> 'lgaOfResidence'
-            END AS lga,
-            CASE
-                WHEN kv.id_type = 'NIN' THEN kv.raw_payload -> 'entity' ->> 'residence_State'
-                ELSE kv.raw_payload -> 'entity' ->> 'stateOfResidence'
-            END AS state
-        FROM kyc_verifications kv
-        LEFT JOIN kyc_nin_data knd ON knd.kyc_verification_id = kv.id AND kv.id_type = 'NIN'
-        LEFT JOIN kyc_bvn_data kbd ON kbd.kyc_verification_id = kv.id AND kv.id_type = 'BVN'
-        WHERE kv.reference_id = $1
-          AND kv.status = true
-          AND kv.id_type IN ('NIN', 'BVN')
-        LIMIT 1
-        "#,
-        body.reference
-    )
-    .fetch_optional(db.get_ref())
-    .await;
+    // ── Fetch verification directly from Dojah — accept Completed OR Pending,
+    //    since we collect available identity data either way. Only "Failed"
+    //    and "Abandoned" are hard-rejected. A short retry covers the brief
+    //    window right after widget submission where Dojah hasn't written
+    //    anything yet at all. ────────────────────────────────────────────────
+    const MAX_ATTEMPTS: u8 = 4;
+    const RETRY_DELAY_MS: u64 = 1200;
 
-    let identity = match kyc_row {
-        Ok(Some(row)) => ResolvedIdentity {
-            id_value:      row.id_value.unwrap_or_default(),
-            id_type:       row.id_type,
-            first_name:    row.first_name.unwrap_or_default(),
-            middle_name:   row.middle_name.unwrap_or_default(),
-            last_name:     row.last_name.unwrap_or_default(),
-            gender:        row.gender.unwrap_or_default(),
-            date_of_birth: row.date_of_birth.unwrap_or_default(),
-            phone_number:  row.phone_number.unwrap_or_default(),
-            image_url:     row.image_url.unwrap_or_default(),
-            address:       row.address.unwrap_or_default(),
-            city:          row.city.unwrap_or_default(),
-            lga:           row.lga.unwrap_or_default(),
-            state:         row.state.unwrap_or_default(),
-        },
-        Ok(None) => {
-            eprintln!("[signup] KYC not found for reference: {}", body.reference);
+    let mut verification: Option<dojah::VerificationResponse> = None;
+    let mut last_status: Option<String> = None;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        match dojah.get_verification(&body.reference).await {
+            Ok(v) => {
+                let vs = v.verification_status.clone();
+                last_status = Some(vs.clone());
+
+                if vs == "Completed" || vs == "Pending" || vs == "Ongoing" {
+                    verification = Some(v);
+                    break;
+                }
+
+                eprintln!(
+                    "[signup] Dojah verification status '{}' for {} — attempt {}/{}",
+                    vs, body.reference, attempt, MAX_ATTEMPTS
+                );
+
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                }
+            }
+            Err(e) => {
+                eprintln!("[signup] Dojah verification fetch error: {:?}", e);
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                }
+            }
+        }
+    }
+
+    let verification = match verification {
+        Some(v) => v,
+        None => {
+            eprintln!(
+                "[signup] Dojah verification unavailable for reference: {} — last status: {:?}",
+                body.reference, last_status
+            );
+            let message = match last_status.as_deref() {
+                Some("Failed") => "Your identity verification failed. Please retry verification.",
+                Some("Abandoned") => "Your identity verification was not completed. Please retry verification.",
+                _ => "Verification is still processing. Please wait a moment and try again.",
+            };
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "status": "error",
-                "message": "Invalid or expired signup reference. Please complete NIN or BVN verification first."
-            }));
-        }
-        Err(e) => {
-            eprintln!("[signup] KYC lookup error: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "status": "error",
-                "message": "Something went wrong. Please try again."
+                "message": message
             }));
         }
     };
+
+    let id_type = verification.id_type.clone().unwrap_or_default();
+    let gov_data = verification.data.government_data.unwrap_or_default().data;
+
+    let identity = if id_type == "NIN" {
+        let entity = gov_data.nin.unwrap_or_default().entity;
+        ResolvedIdentity {
+            id_value:      entity.nin.unwrap_or_default(),
+            id_type:       "NIN".into(),
+            first_name:    entity.firstname.unwrap_or_default(),
+            middle_name:   entity.middlename.unwrap_or_default(),
+            last_name:     entity.surname.unwrap_or_default(),
+            gender:        entity.gender.unwrap_or_default(),
+            date_of_birth: entity.birthdate.unwrap_or_default(),
+            phone_number:  entity.telephoneno.unwrap_or_default(),
+            image_url:     entity.image_url.unwrap_or_default(),
+            address:       entity.residence_AddressLine1.unwrap_or_default(),
+            city:          entity.residence_Town.unwrap_or_default(),
+            lga:           entity.residence_lga.unwrap_or_default(),
+            state:         entity.residence_state.unwrap_or_default(),
+        }
+    } else if id_type == "BVN" {
+        let entity = gov_data.bvn.unwrap_or_default().entity;
+        ResolvedIdentity {
+            id_value:      entity.bvn.unwrap_or_default(),
+            id_type:       "BVN".into(),
+            first_name:    entity.first_name.unwrap_or_default(),
+            middle_name:   entity.middle_name.unwrap_or_default(),
+            last_name:     entity.last_name.unwrap_or_default(),
+            gender:        entity.gender.unwrap_or_default(),
+            date_of_birth: entity.date_of_birth.unwrap_or_default(),
+            phone_number:  entity.phone_number1.unwrap_or_default(),
+            image_url:     entity.image_url.unwrap_or_default(),
+            address:       entity.residential_address.unwrap_or_default(),
+            city:          entity.lga_of_residence.clone().unwrap_or_default(),
+            lga:           entity.lga_of_residence.unwrap_or_default(),
+            state:         entity.state_of_residence.unwrap_or_default(),
+        }
+    } else {
+        eprintln!("[signup] Unsupported id_type '{}' for reference: {}", id_type, body.reference);
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "message": "Unsupported verification type. Please complete NIN or BVN verification."
+        }));
+    };
+
+    if identity.id_value.is_empty() {
+        eprintln!("[signup] Empty identity value for reference: {}", body.reference);
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "message": "Verification data incomplete. Please try again."
+        }));
+    }
 
     // ── Resolve referral code → referrer_id ──────────────────────────────────
     let referrer_id: Option<String> = if let Some(code) = &body.referral_code {

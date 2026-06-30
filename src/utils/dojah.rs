@@ -94,8 +94,6 @@ pub struct NinAdvanceEntity {
     pub tax_residency: Option<String>,
 }
 
-
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NinAdvanceResponse {
     pub entity: NinAdvanceEntity,
@@ -149,6 +147,74 @@ pub struct BvnSelfieEntity {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BvnSelfieResponse {
     pub entity: BvnSelfieEntity,
+}
+
+// ─── Verification-by-reference models ──────────────────────────────────────
+// Used by GET /api/v1/kyc/verification?reference_id=...
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct NinEntity {
+    pub nin: Option<String>,
+    pub firstname: Option<String>,
+    pub middlename: Option<String>,
+    pub surname: Option<String>,
+    pub telephoneno: Option<String>,
+    pub gender: Option<String>,
+    pub birthdate: Option<String>,
+    pub image_url: Option<String>,
+    pub residence_Town: Option<String>,
+    pub residence_lga: Option<String>,
+    pub residence_state: Option<String>,
+    pub residence_AddressLine1: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct BvnEntity {
+    pub bvn: Option<String>,
+    pub first_name: Option<String>,
+    pub middle_name: Option<String>,
+    pub last_name: Option<String>,
+    pub phone_number1: Option<String>,
+    pub gender: Option<String>,
+    pub date_of_birth: Option<String>,
+    pub image_url: Option<String>,
+    pub lga_of_residence: Option<String>,
+    pub state_of_residence: Option<String>,
+    pub residential_address: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct NinWrapper {
+    pub entity: NinEntity,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct BvnWrapper {
+    pub entity: BvnEntity,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct GovernmentData {
+    pub nin: Option<NinWrapper>,
+    pub bvn: Option<BvnWrapper>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct GovernmentDataWrapper {
+    pub data: GovernmentData,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct VerificationData {
+    pub government_data: Option<GovernmentDataWrapper>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VerificationResponse {
+    pub status: bool,
+    pub id_type: Option<String>,
+    pub verification_status: String,
+    pub data: VerificationData,
 }
 
 // ─── Client ──────────────────────────────────────────────────────────────────
@@ -212,6 +278,19 @@ impl DojahClient {
             .header("AppId", &self.cfg.app_id)
             .header("Authorization", &self.cfg.secret_key)
             .json(&req)
+            .send()
+            .await?;
+        Self::handle(resp).await
+    }
+
+    /// GET /api/v1/kyc/verification — fetch verification result directly by reference_id
+    pub async fn get_verification(&self, reference_id: &str) -> Result<VerificationResponse, DojahError> {
+        let resp = self
+            .http
+            .get(self.url("/api/v1/kyc/verification"))
+            .header("AppId", &self.cfg.app_id)
+            .header("Authorization", &self.cfg.secret_key)
+            .query(&[("reference_id", reference_id)])
             .send()
             .await?;
         Self::handle(resp).await

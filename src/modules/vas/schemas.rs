@@ -70,7 +70,6 @@ pub struct BillsPaymentRequest {
     // Optional — not all billers require a meter/plan type selection
     pub item_id: Option<String>,
 
-    // Optional — not used by 9PSB bills API, frontend sends empty string
     pub customer_phone: Option<String>,
 
     #[validate(length(min = 1, message = "Customer name is required"))]
