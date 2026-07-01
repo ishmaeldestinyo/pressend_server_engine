@@ -385,8 +385,6 @@ pub async fn send_otp(
     })
 }
 
-
-
 pub async fn verify_otp(
     body: web::Json<schemas::VerifyOTPRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -396,12 +394,15 @@ pub async fn verify_otp(
     db: web::Data<sqlx::PgPool>,
 ) -> impl Responder {
     if let Err(errors) = body.0.validate() {
+        println!("[verify_otp] validation failed for email={}: {:?}", body.email, errors);
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
             status: "error",
             message: "Invalid input",
             errors,
         });
     }
+
+    println!("[verify_otp] start — email={}", body.email);
 
     let otp_redis_key = format!("{}.verify.otp", body.email);
 
@@ -413,7 +414,7 @@ pub async fn verify_otp(
     {
         Ok(v) => v,
         Err(e) => {
-            println!("[verify_otp] Redis error: {}", e);
+            println!("[verify_otp] Redis GET error for key={}: {}", otp_redis_key, e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -424,6 +425,7 @@ pub async fn verify_otp(
     let stored_hash = match stored_hash {
         Some(h) => h,
         None => {
+            println!("[verify_otp] no OTP found in redis for email={} (expired or never set)", body.email);
             return HttpResponse::BadRequest().json(ApiResponse {
                 message: "Invalid or expired OTP".into(),
                 status: ResponseStatus::ERROR,
@@ -432,8 +434,18 @@ pub async fn verify_otp(
     };
 
     match verify_password(&body.otp, &stored_hash) {
-        Ok(true) => {}
-        _ => {
+        Ok(true) => {
+            println!("[verify_otp] OTP verified successfully for email={}", body.email);
+        }
+        Ok(false) => {
+            println!("[verify_otp] OTP mismatch for email={}", body.email);
+            return HttpResponse::BadRequest().json(ApiResponse {
+                message: "Invalid or expired OTP".into(),
+                status: ResponseStatus::ERROR,
+            });
+        }
+        Err(e) => {
+            println!("[verify_otp] OTP hash verification error for email={}: {}", body.email, e);
             return HttpResponse::BadRequest().json(ApiResponse {
                 message: "Invalid or expired OTP".into(),
                 status: ResponseStatus::ERROR,
@@ -444,10 +456,14 @@ pub async fn verify_otp(
     let email = body.email.clone();
     let (_, account) = tokio::join!(
         async {
-            let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+            match redis::cmd("DEL")
                 .arg(&otp_redis_key)
-                .query_async(&mut redis_conn)
-                .await;
+                .query_async::<_, ()>(&mut redis_conn)
+                .await
+            {
+                Ok(_) => println!("[verify_otp] deleted OTP key={} from redis", otp_redis_key),
+                Err(e) => println!("[verify_otp] failed to delete OTP key={}: {}", otp_redis_key, e),
+            }
         },
         sqlx::query!(
             r#"SELECT id, email, firstname, lastname, address, account_number, kyc_reference
@@ -458,9 +474,17 @@ pub async fn verify_otp(
     );
 
     let account = match account {
-        Ok(row) => row,
+        Ok(row) => {
+            println!(
+                "[verify_otp] account found — id={}, has_account_number={}, kyc_reference={:?}",
+                row.id,
+                row.account_number.is_some(),
+                row.kyc_reference
+            );
+            row
+        }
         Err(e) => {
-            println!("[verify_otp] DB error: {}", e);
+            println!("[verify_otp] DB error fetching account for email={}: {}", email, e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -473,6 +497,11 @@ pub async fn verify_otp(
     // ── Open 9PSB wallet synchronously if not already opened ─────────────────
     if account.account_number.is_none() {
         if let Some(kyc_reference) = account.kyc_reference.clone() {
+            println!(
+                "[verify_otp] account {} has no wallet yet — resolving identity for kyc_reference={}",
+                account.id, kyc_reference
+            );
+
             match sqlx::query!(
                 r#"
                 SELECT
@@ -504,6 +533,11 @@ pub async fn verify_otp(
             .await
             {
                 Ok(Some(identity)) => {
+                    println!(
+                        "[verify_otp] identity row found — reference={}, id_type={}",
+                        kyc_reference, identity.id_type
+                    );
+
                     let parsed = match identity.id_type.as_str() {
                         "NIN" => identity.nin.clone().map(|nin| {
                             (
@@ -557,10 +591,15 @@ pub async fn verify_otp(
                     {
                         if id_value.is_empty() {
                             println!(
-                                "[verify_otp] id_value empty for reference={}",
-                                kyc_reference
+                                "[verify_otp] id_value empty for reference={} (id_type={})",
+                                kyc_reference, id_type
                             );
                         } else {
+                            println!(
+                                "[verify_otp] checking for existing {} duplicate — account={}",
+                                id_type, account.id
+                            );
+
                             // ── Block if this NIN/BVN is already used by another account ──
                             let existing_id_check: Result<Option<uuid::Uuid>, sqlx::Error> =
                                 if id_type == "NIN" {
@@ -584,7 +623,7 @@ pub async fn verify_otp(
                             match existing_id_check {
                                 Ok(Some(existing_id)) => {
                                     println!(
-                                        "[verify_otp] {} '{}' already exists on account {} — blocking verification for account {}",
+                                        "[verify_otp] DUPLICATE {} '{}' — already exists on account {} — blocking verification for account {}",
                                         id_type, id_value, existing_id, account.id
                                     );
                                     return HttpResponse::Conflict().json(ApiResponse {
@@ -597,8 +636,8 @@ pub async fn verify_otp(
                                 }
                                 Err(e) => {
                                     println!(
-                                        "[verify_otp] error checking existing {}: {}",
-                                        id_type, e
+                                        "[verify_otp] error checking existing {} for value '{}': {}",
+                                        id_type, id_value, e
                                     );
                                     return HttpResponse::InternalServerError().json(ApiResponse {
                                         message: "Service temporarily unavailable".into(),
@@ -606,10 +645,21 @@ pub async fn verify_otp(
                                     });
                                 }
                                 Ok(None) => {
+                                    println!(
+                                        "[verify_otp] no duplicate found for {} — proceeding to open 9PSB wallet for account {}",
+                                        id_type, account.id
+                                    );
+
                                     let gender_code = match gender.to_uppercase().as_str() {
                                         "MALE" => 0,
                                         "FEMALE" => 1,
-                                        _ => 0,
+                                        _ => {
+                                            println!(
+                                                "[verify_otp] unrecognized gender value '{}' — defaulting gender_code to 0",
+                                                gender
+                                            );
+                                            0
+                                        }
                                     };
 
                                     let other_names = format!("{} {}", first_name, middle_name);
@@ -619,6 +669,10 @@ pub async fn verify_otp(
                                         if parts.len() == 3 {
                                             format!("{}/{}/{}", parts[2], parts[1], parts[0])
                                         } else {
+                                            println!(
+                                                "[verify_otp] dob '{}' not in expected YYYY-MM-DD format — using as-is",
+                                                dob
+                                            );
                                             dob.clone()
                                         }
                                     };
@@ -645,7 +699,8 @@ pub async fn verify_otp(
                                     }
 
                                     println!(
-                                        "[verify_otp] 9PSB request body: {}",
+                                        "[verify_otp] 9PSB open_wallet request — transactionTrackingRef={}, body: {}",
+                                        transaction_ref,
                                         serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
                                     );
 
@@ -658,12 +713,20 @@ pub async fn verify_otp(
                                         .await
                                     {
                                         Ok(json) => {
+                                            // Always log the full raw response for traceability.
+                                            println!(
+                                                "[verify_otp] 9PSB open_wallet response — transactionTrackingRef={}, full response: {}",
+                                                transaction_ref,
+                                                serde_json::to_string_pretty(&json).unwrap_or_default()
+                                            );
+
                                             let status_str =
                                                 json["status"].as_str().unwrap_or("").to_uppercase();
 
                                             if status_str != "SUCCESS" {
                                                 println!(
-                                                    "[verify_otp] 9PSB rejected — status: '{}', message: '{}'",
+                                                    "[verify_otp] 9PSB rejected — transactionTrackingRef={}, status: '{}', message: '{}', full response above",
+                                                    transaction_ref,
                                                     status_str,
                                                     json["message"].as_str().unwrap_or("no message")
                                                 );
@@ -677,9 +740,15 @@ pub async fn verify_otp(
                                                     .unwrap_or("")
                                                     .to_string();
 
+                                                println!(
+                                                    "[verify_otp] 9PSB SUCCESS — transactionTrackingRef={}, account_number='{}', account_name='{}'",
+                                                    transaction_ref, account_number, account_name
+                                                );
+
                                                 if account_number.is_empty() {
                                                     println!(
-                                                        "[verify_otp] accountNumber empty in 9PSB response"
+                                                        "[verify_otp] accountNumber empty in 9PSB SUCCESS response — transactionTrackingRef={}",
+                                                        transaction_ref
                                                     );
                                                 } else {
                                                     let nin_val = if id_type == "NIN" {
@@ -693,7 +762,7 @@ pub async fn verify_otp(
                                                         None
                                                     };
 
-                                                    if let Err(e) = sqlx::query!(
+                                                    match sqlx::query!(
                                                         r#"UPDATE accounts SET
                                                             account_number   = $1,
                                                             account_name     = $2,
@@ -725,21 +794,27 @@ pub async fn verify_otp(
                                                     .execute(db.get_ref())
                                                     .await
                                                     {
-                                                        println!(
-                                                            "[verify_otp] failed to persist wallet info: {}",
-                                                            e
-                                                        );
-                                                    } else {
-                                                        println!(
-                                                            "[verify_otp] 9PSB wallet opened — email: {}, account_number: {}",
-                                                            email, account_number
-                                                        );
+                                                        Ok(result) => {
+                                                            println!(
+                                                                "[verify_otp] wallet info persisted — account={}, account_number={}, rows_affected={}",
+                                                                account.id, account_number, result.rows_affected()
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            println!(
+                                                                "[verify_otp] failed to persist wallet info for account={}: {}",
+                                                                account.id, e
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            println!("[verify_otp] 9PSB wallet open failed: {}", e);
+                                            println!(
+                                                "[verify_otp] 9PSB open_wallet call failed — transactionTrackingRef={}, error: {}",
+                                                transaction_ref, e
+                                            );
                                         }
                                     }
                                 }
@@ -747,7 +822,7 @@ pub async fn verify_otp(
                         }
                     } else {
                         println!(
-                            "[verify_otp] identity data missing for id_type={} reference={}",
+                            "[verify_otp] identity data missing/unparseable for id_type={} reference={}",
                             identity.id_type, kyc_reference
                         );
                     }
@@ -759,7 +834,10 @@ pub async fn verify_otp(
                     );
                 }
                 Err(e) => {
-                    println!("[verify_otp] kyc_verifications fetch error: {}", e);
+                    println!(
+                        "[verify_otp] kyc_verifications fetch error for reference={}: {}",
+                        kyc_reference, e
+                    );
                 }
             }
         } else {
@@ -768,6 +846,11 @@ pub async fn verify_otp(
                 email
             );
         }
+    } else {
+        println!(
+            "[verify_otp] account {} already has account_number — skipping wallet resolution",
+            account.id
+        );
     }
 
     let secret = cfg.jwt_secret.clone();
@@ -779,7 +862,7 @@ pub async fn verify_otp(
     let access_token = match access_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[verify_otp] Token error: {}", e);
+            println!("[verify_otp] access token generation failed for account={}: {}", account_id, e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -790,13 +873,15 @@ pub async fn verify_otp(
     let refresh_token = match refresh_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[verify_otp] Token error: {}", e);
+            println!("[verify_otp] refresh token generation failed for account={}: {}", account_id, e);
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
             });
         }
     };
+
+    println!("[verify_otp] tokens generated successfully for account={}", account_id);
 
     let event = VerifyEmailEvent {
         email: body.email.clone(),
@@ -806,6 +891,11 @@ pub async fn verify_otp(
         &kafka_cfg.kafka_topic_account_otp_verify,
         &body.email,
         &event,
+    );
+
+    println!(
+        "[verify_otp] complete — email={}, account={}, kafka event published to topic={}",
+        body.email, account_id, kafka_cfg.kafka_topic_account_otp_verify
     );
 
     HttpResponse::Ok().json(AuthResponse {
