@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, firstname, lastname, address, account_number, kyc_reference\n           FROM accounts WHERE email = $1",
+  "query": "SELECT id, email, firstname, lastname, address, account_number, kyc_reference\n               FROM accounts WHERE email = $1",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       true
     ]
   },
-  "hash": "74865e1a9cfff2591bfe519627e0ca95e8b409b5fe535d4aa75ff03dc6ed90c3"
+  "hash": "c2dedae34e23f719201a205ccb9f75c9c0c647313a0dcb6be2767355c8d953db"
 }

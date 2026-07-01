@@ -355,6 +355,8 @@ pub async fn signup(
     })
 }
 
+
+
 pub async fn send_otp(
     body: web::Json<schemas::SendOTPRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -382,6 +384,8 @@ pub async fn send_otp(
         status: ResponseStatus::SUCCESS,
     })
 }
+
+
 
 pub async fn verify_otp(
     body: web::Json<schemas::VerifyOTPRequest>,
@@ -557,140 +561,187 @@ pub async fn verify_otp(
                                 kyc_reference
                             );
                         } else {
-                            let gender_code = match gender.to_uppercase().as_str() {
-                                "MALE" => 0,
-                                "FEMALE" => 1,
-                                _ => 0,
-                            };
-
-                            let other_names = format!("{} {}", first_name, middle_name);
-
-                            let date_of_birth_fmt = {
-                                let parts: Vec<&str> = dob.split('-').collect();
-                                if parts.len() == 3 {
-                                    format!("{}/{}/{}", parts[2], parts[1], parts[0])
+                            // ── Block if this NIN/BVN is already used by another account ──
+                            let existing_id_check: Result<Option<uuid::Uuid>, sqlx::Error> =
+                                if id_type == "NIN" {
+                                    sqlx::query_scalar!(
+                                        "SELECT id FROM accounts WHERE nin = $1 AND id != $2",
+                                        id_value,
+                                        account.id
+                                    )
+                                    .fetch_optional(db.get_ref())
+                                    .await
                                 } else {
-                                    dob.clone()
-                                }
-                            };
+                                    sqlx::query_scalar!(
+                                        "SELECT id FROM accounts WHERE bvn = $1 AND id != $2",
+                                        id_value,
+                                        account.id
+                                    )
+                                    .fetch_optional(db.get_ref())
+                                    .await
+                                };
 
-                            let transaction_ref = uuid::Uuid::new_v4().to_string();
-                            let address = account.address.clone().unwrap_or_default();
-
-                            let mut open_wallet_body = serde_json::json!({
-                                "transactionTrackingRef": transaction_ref,
-                                "lastName":               last_name,
-                                "otherNames":             other_names,
-                                "phoneNo":                phone,
-                                "gender":                 gender_code,
-                                "dateOfBirth":            date_of_birth_fmt,
-                                "address":                address,
-                                "email":                  account.email,
-                            });
-
-                            if id_type == "NIN" {
-                                open_wallet_body["nationalIdentityNo"] =
-                                    serde_json::json!(id_value);
-                            } else {
-                                open_wallet_body["bvn"] = serde_json::json!(id_value);
-                            }
-
-                            println!(
-                                "[verify_otp] 9PSB request body: {}",
-                                serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
-                            );
-
-                            match PsbClient::new(cfg.get_ref())
-                                .post(
-                                    &mut redis_conn,
-                                    "/waas/api/v1/open_wallet",
-                                    &open_wallet_body,
-                                )
-                                .await
-                            {
-                                Ok(json) => {
-                                    let status_str =
-                                        json["status"].as_str().unwrap_or("").to_uppercase();
-
-                                    if status_str != "SUCCESS" {
-                                        println!(
-                                            "[verify_otp] 9PSB rejected — status: '{}', message: '{}'",
-                                            status_str,
-                                            json["message"].as_str().unwrap_or("no message")
-                                        );
-                                    } else {
-                                        let account_number = json["data"]["accountNumber"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let account_name = json["data"]["fullName"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string();
-
-                                        if account_number.is_empty() {
-                                            println!(
-                                                "[verify_otp] accountNumber empty in 9PSB response"
-                                            );
-                                        } else {
-                                            let nin_val = if id_type == "NIN" {
-                                                Some(id_value.clone())
-                                            } else {
-                                                None
-                                            };
-                                            let bvn_val = if id_type == "BVN" {
-                                                Some(id_value.clone())
-                                            } else {
-                                                None
-                                            };
-
-                                            if let Err(e) = sqlx::query!(
-                                                r#"UPDATE accounts SET
-                                                    account_number   = $1,
-                                                    account_name     = $2,
-                                                    bank_name        = '9PSB',
-                                                    firstname        = COALESCE(firstname, $3),
-                                                    lastname         = COALESCE(lastname, $4),
-                                                    othername        = COALESCE(othername, $5),
-                                                    phone_number     = COALESCE(phone_number, $6),
-                                                    gender           = COALESCE(gender, $7),
-                                                    date_of_birth    = COALESCE(date_of_birth, $8),
-                                                    nin              = COALESCE(nin, $9),
-                                                    bvn              = COALESCE(bvn, $10),
-                                                    current_tier     = GREATEST(current_tier, 1),
-                                                    tier_upgraded_at = NOW(),
-                                                    updated_at       = NOW()
-                                                WHERE id = $11"#,
-                                                account_number,
-                                                account_name,
-                                                first_name,
-                                                last_name,
-                                                middle_name,
-                                                phone,
-                                                gender,
-                                                dob,
-                                                nin_val,
-                                                bvn_val,
-                                                account.id
-                                            )
-                                            .execute(db.get_ref())
-                                            .await
-                                            {
-                                                println!(
-                                                    "[verify_otp] failed to persist wallet info: {}",
-                                                    e
-                                                );
-                                            } else {
-                                                println!(
-                                                    "[verify_otp] 9PSB wallet opened — email: {}, account_number: {}",
-                                                    email, account_number
-                                                );
-                                            }
-                                        }
-                                    }
+                            match existing_id_check {
+                                Ok(Some(existing_id)) => {
+                                    println!(
+                                        "[verify_otp] {} '{}' already exists on account {} — blocking verification for account {}",
+                                        id_type, id_value, existing_id, account.id
+                                    );
+                                    return HttpResponse::Conflict().json(ApiResponse {
+                                        message: format!(
+                                            "This {} is already linked to another account. Please contact support to resolve this.",
+                                            id_type
+                                        ),
+                                        status: ResponseStatus::ERROR,
+                                    });
                                 }
                                 Err(e) => {
-                                    println!("[verify_otp] 9PSB wallet open failed: {}", e);
+                                    println!(
+                                        "[verify_otp] error checking existing {}: {}",
+                                        id_type, e
+                                    );
+                                    return HttpResponse::InternalServerError().json(ApiResponse {
+                                        message: "Service temporarily unavailable".into(),
+                                        status: ResponseStatus::ERROR,
+                                    });
+                                }
+                                Ok(None) => {
+                                    let gender_code = match gender.to_uppercase().as_str() {
+                                        "MALE" => 0,
+                                        "FEMALE" => 1,
+                                        _ => 0,
+                                    };
+
+                                    let other_names = format!("{} {}", first_name, middle_name);
+
+                                    let date_of_birth_fmt = {
+                                        let parts: Vec<&str> = dob.split('-').collect();
+                                        if parts.len() == 3 {
+                                            format!("{}/{}/{}", parts[2], parts[1], parts[0])
+                                        } else {
+                                            dob.clone()
+                                        }
+                                    };
+
+                                    let transaction_ref = uuid::Uuid::new_v4().to_string();
+                                    let address = account.address.clone().unwrap_or_default();
+
+                                    let mut open_wallet_body = serde_json::json!({
+                                        "transactionTrackingRef": transaction_ref,
+                                        "lastName":               last_name,
+                                        "otherNames":             other_names,
+                                        "phoneNo":                phone,
+                                        "gender":                 gender_code,
+                                        "dateOfBirth":            date_of_birth_fmt,
+                                        "address":                address,
+                                        "email":                  account.email,
+                                    });
+
+                                    if id_type == "NIN" {
+                                        open_wallet_body["nationalIdentityNo"] =
+                                            serde_json::json!(id_value);
+                                    } else {
+                                        open_wallet_body["bvn"] = serde_json::json!(id_value);
+                                    }
+
+                                    println!(
+                                        "[verify_otp] 9PSB request body: {}",
+                                        serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
+                                    );
+
+                                    match PsbClient::new(cfg.get_ref())
+                                        .post(
+                                            &mut redis_conn,
+                                            "/waas/api/v1/open_wallet",
+                                            &open_wallet_body,
+                                        )
+                                        .await
+                                    {
+                                        Ok(json) => {
+                                            let status_str =
+                                                json["status"].as_str().unwrap_or("").to_uppercase();
+
+                                            if status_str != "SUCCESS" {
+                                                println!(
+                                                    "[verify_otp] 9PSB rejected — status: '{}', message: '{}'",
+                                                    status_str,
+                                                    json["message"].as_str().unwrap_or("no message")
+                                                );
+                                            } else {
+                                                let account_number = json["data"]["accountNumber"]
+                                                    .as_str()
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let account_name = json["data"]["fullName"]
+                                                    .as_str()
+                                                    .unwrap_or("")
+                                                    .to_string();
+
+                                                if account_number.is_empty() {
+                                                    println!(
+                                                        "[verify_otp] accountNumber empty in 9PSB response"
+                                                    );
+                                                } else {
+                                                    let nin_val = if id_type == "NIN" {
+                                                        Some(id_value.clone())
+                                                    } else {
+                                                        None
+                                                    };
+                                                    let bvn_val = if id_type == "BVN" {
+                                                        Some(id_value.clone())
+                                                    } else {
+                                                        None
+                                                    };
+
+                                                    if let Err(e) = sqlx::query!(
+                                                        r#"UPDATE accounts SET
+                                                            account_number   = $1,
+                                                            account_name     = $2,
+                                                            bank_name        = '9PSB',
+                                                            firstname        = COALESCE(firstname, $3),
+                                                            lastname         = COALESCE(lastname, $4),
+                                                            othername        = COALESCE(othername, $5),
+                                                            phone_number     = COALESCE(phone_number, $6),
+                                                            gender           = COALESCE(gender, $7),
+                                                            date_of_birth    = COALESCE(date_of_birth, $8),
+                                                            nin              = COALESCE(nin, $9),
+                                                            bvn              = COALESCE(bvn, $10),
+                                                            current_tier     = GREATEST(current_tier, 1),
+                                                            tier_upgraded_at = NOW(),
+                                                            updated_at       = NOW()
+                                                        WHERE id = $11"#,
+                                                        account_number,
+                                                        account_name,
+                                                        first_name,
+                                                        last_name,
+                                                        middle_name,
+                                                        phone,
+                                                        gender,
+                                                        dob,
+                                                        nin_val,
+                                                        bvn_val,
+                                                        account.id
+                                                    )
+                                                    .execute(db.get_ref())
+                                                    .await
+                                                    {
+                                                        println!(
+                                                            "[verify_otp] failed to persist wallet info: {}",
+                                                            e
+                                                        );
+                                                    } else {
+                                                        println!(
+                                                            "[verify_otp] 9PSB wallet opened — email: {}, account_number: {}",
+                                                            email, account_number
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!("[verify_otp] 9PSB wallet open failed: {}", e);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -764,6 +815,7 @@ pub async fn verify_otp(
         refresh_token: Some(refresh_token),
     })
 }
+
 
 pub async fn signin(
     body: web::Json<schemas::SignInRequest>,
