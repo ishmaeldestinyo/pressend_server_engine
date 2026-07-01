@@ -1153,13 +1153,13 @@ async fn resolve_identity_from_db(
         return Ok(None);
     };
 
-    if !r.status || r.verification_status != "Completed" {
-        eprintln!(
-            "[resolve_identity_from_db] reference={} not usable yet (status={}, verification_status={})",
-            kyc_reference, r.status, r.verification_status
-        );
-        return Ok(None);
-    }
+    // if !r.status || r.verification_status != "Completed" {
+    //     eprintln!(
+    //         "[resolve_identity_from_db] reference={} not usable yet (status={}, verification_status={})",
+    //         kyc_reference, r.status, r.verification_status
+    //     );
+    //     return Ok(None);
+    // }
 
     let identity = match r.id_type.as_str() {
         "NIN" => {
