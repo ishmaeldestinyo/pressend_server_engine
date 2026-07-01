@@ -237,7 +237,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
     }))
 }
 
-
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -1062,321 +1061,30 @@ pub async fn refresh_token(
         refresh_token: Some(refresh_token),
     })
 }
-struct ResolvedIdentity {
-    id_value: String,
-    id_type: String, // "NIN" or "BVN"
-    first_name: String,
-    middle_name: String,
-    last_name: String,
-    gender: String,
-    date_of_birth: String, // yyyy-MM-dd
-    phone_number: String,
-}
 
-struct KycRow {
-    id_type: String,
-    verification_status: String,
-    status: bool,
-    nin: Option<String>,
-    nin_first_name: Option<String>,
-    nin_middle_name: Option<String>,
-    nin_last_name: Option<String>,
-    nin_gender: Option<String>,
-    nin_dob: Option<chrono::NaiveDate>,
-    nin_phone: Option<String>,
-    bvn: Option<String>,
-    bvn_first_name: Option<String>,
-    bvn_middle_name: Option<String>,
-    bvn_last_name: Option<String>,
-    bvn_gender: Option<String>,
-    bvn_dob: Option<chrono::NaiveDate>,
-    bvn_phone: Option<String>,
-}
-
-/// PRIMARY path — read a completed verification from our own kyc_verifications
-/// table (populated by the Dojah webhook). Avoids hitting Dojah's live
-/// verification endpoint (slow / 524-prone) whenever a webhook has already landed.
-async fn resolve_identity_from_db(
-    db: &sqlx::PgPool,
-    account_id: uuid::Uuid,
-    kyc_reference: &str,
-) -> Result<Option<ResolvedIdentity>, sqlx::Error> {
-    let row = sqlx::query_as!(
-        KycRow,
-        r#"
-        SELECT
-            kv.id_type                       AS "id_type!",
-            kv.verification_status           AS "verification_status!",
-            kv.status                        AS "status!",
-            n.nin,
-            n.first_name                     AS nin_first_name,
-            n.middle_name                    AS nin_middle_name,
-            n.last_name                      AS nin_last_name,
-            n.gender                         AS nin_gender,
-            n.date_of_birth                  AS nin_dob,
-            n.phone_number                   AS nin_phone,
-            b.bvn,
-            b.first_name                     AS bvn_first_name,
-            b.middle_name                    AS bvn_middle_name,
-            b.last_name                      AS bvn_last_name,
-            b.gender                         AS bvn_gender,
-            b.date_of_birth                  AS bvn_dob,
-            b.phone_number                   AS bvn_phone
-        FROM kyc_verifications kv
-        LEFT JOIN kyc_nin_data n ON n.kyc_verification_id = kv.id
-        LEFT JOIN kyc_bvn_data b ON b.kyc_verification_id = kv.id
-        WHERE kv.reference_id = $1
-          AND kv.account_id   = $2
-        ORDER BY kv.created_at DESC
-        LIMIT 1
-        "#,
-        kyc_reference,
-        account_id
-    )
-    .fetch_optional(db)
-    .await?;
-
-    let Some(r) = row else {
-        eprintln!(
-            "[resolve_identity_from_db] no kyc_verifications row yet for reference={}",
-            kyc_reference
-        );
-        return Ok(None);
-    };
-
-    // if !r.status || r.verification_status != "Completed" {
-    //     eprintln!(
-    //         "[resolve_identity_from_db] reference={} not usable yet (status={}, verification_status={})",
-    //         kyc_reference, r.status, r.verification_status
-    //     );
-    //     return Ok(None);
-    // }
-
-    let identity = match r.id_type.as_str() {
-        "NIN" => {
-            let Some(nin) = r.nin else {
-                eprintln!(
-                    "[resolve_identity_from_db] id_type=NIN but kyc_nin_data missing for reference={}",
-                    kyc_reference
-                );
-                return Ok(None);
-            };
-            ResolvedIdentity {
-                id_value: nin,
-                id_type: "NIN".into(),
-                first_name: r.nin_first_name.unwrap_or_default(),
-                middle_name: r.nin_middle_name.unwrap_or_default(),
-                last_name: r.nin_last_name.unwrap_or_default(),
-                gender: r.nin_gender.unwrap_or_default(),
-                date_of_birth: r
-                    .nin_dob
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default(),
-                phone_number: r.nin_phone.unwrap_or_default(),
-            }
-        }
-        "BVN" => {
-            let Some(bvn) = r.bvn else {
-                eprintln!(
-                    "[resolve_identity_from_db] id_type=BVN but kyc_bvn_data missing for reference={}",
-                    kyc_reference
-                );
-                return Ok(None);
-            };
-            ResolvedIdentity {
-                id_value: bvn,
-                id_type: "BVN".into(),
-                first_name: r.bvn_first_name.unwrap_or_default(),
-                middle_name: r.bvn_middle_name.unwrap_or_default(),
-                last_name: r.bvn_last_name.unwrap_or_default(),
-                gender: r.bvn_gender.unwrap_or_default(),
-                date_of_birth: r
-                    .bvn_dob
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default(),
-                phone_number: r.bvn_phone.unwrap_or_default(),
-            }
-        }
-        other => {
-            eprintln!(
-                "[resolve_identity_from_db] id_type '{}' not NIN or BVN for reference={}",
-                other, kyc_reference
-            );
-            return Ok(None);
-        }
-    };
-
-    if identity.id_value.is_empty() {
-        eprintln!(
-            "[resolve_identity_from_db] identity.id_value empty for reference={}",
-            kyc_reference
-        );
-        return Ok(None);
-    }
-
-    Ok(Some(identity))
-}
-
-/// FALLBACK path — live Dojah lookup, used only when no webhook-derived
-/// record exists yet in kyc_verifications.
-async fn resolve_identity(
-    dojah: &DojahClient,
-    kyc_reference: &str,
-) -> Result<Option<ResolvedIdentity>, String> {
-    let verification = dojah
-        .get_verification(kyc_reference)
-        .await
-        .map_err(|e| format!("Dojah verification fetch error: {:?}", e))?;
-
-    let entity = verification.entity;
-
-    eprintln!(
-        "[resolve_identity] kyc_reference={} status={} verification_status={} id_type={:?}",
-        kyc_reference, entity.status, entity.verification_status, entity.id_type
-    );
-
-    let id_type = entity.id_type.clone().unwrap_or_default();
-    let gov_data = entity.data.government_data.unwrap_or_default().data;
-
-    eprintln!(
-        "[resolve_identity] gov_data present: nin={} bvn={}",
-        gov_data.nin.is_some(), gov_data.bvn.is_some()
-    );
-
-    let identity = if id_type == "NIN" {
-        let e = gov_data.nin.unwrap_or_default().entity;
-        eprintln!("[resolve_identity] NIN entity.nin={:?}", e.nin);
-        ResolvedIdentity {
-            id_value:      e.nin.unwrap_or_default(),
-            id_type:       "NIN".into(),
-            first_name:    e.firstname.unwrap_or_default(),
-            middle_name:   e.middlename.unwrap_or_default(),
-            last_name:     e.surname.unwrap_or_default(),
-            gender:        e.gender.unwrap_or_default(),
-            date_of_birth: e.birthdate.unwrap_or_default(),
-            phone_number:  e.telephoneno.unwrap_or_default(),
-        }
-    } else if id_type == "BVN" {
-        let e = gov_data.bvn.unwrap_or_default().entity;
-        eprintln!("[resolve_identity] BVN entity.bvn={:?}", e.bvn);
-        ResolvedIdentity {
-            id_value:      e.bvn.unwrap_or_default(),
-            id_type:       "BVN".into(),
-            first_name:    e.first_name.unwrap_or_default(),
-            middle_name:   e.middle_name.unwrap_or_default(),
-            last_name:     e.last_name.unwrap_or_default(),
-            gender:        e.gender.unwrap_or_default(),
-            date_of_birth: e.date_of_birth.unwrap_or_default(),
-            phone_number:  e.phone_number1.unwrap_or_default(),
-        }
-    } else {
-        eprintln!("[resolve_identity] id_type '{}' not NIN or BVN — returning None", id_type);
-        return Ok(None);
-    };
-
-    if identity.id_value.is_empty() {
-        eprintln!("[resolve_identity] identity.id_value is empty — returning None");
-        return Ok(None);
-    }
-
-    Ok(Some(identity))
-}
-
-/// Opens a 9PSB wallet for a resolved identity and returns (account_number, account_name).
-async fn open_psb_wallet(
-    cfg: &Config,
-    redis_conn: &mut redis::aio::ConnectionManager,
-    identity: &ResolvedIdentity,
-    email: &str,
-    address: &str,
-) -> Result<(String, String), String> {
-    let transaction_ref = uuid::Uuid::new_v4().to_string();
-
-    let gender_code = match identity.gender.to_uppercase().as_str() {
-        "MALE" => 0,
-        "FEMALE" => 1,
-        _ => 0,
-    };
-
-    let other_names = format!("{} {}", identity.first_name, identity.middle_name);
-
-    let date_of_birth = {
-        let parts: Vec<&str> = identity.date_of_birth.split('-').collect();
-        if parts.len() == 3 {
-            format!("{}/{}/{}", parts[2], parts[1], parts[0])
-        } else {
-            identity.date_of_birth.clone()
-        }
-    };
-
-    let mut open_wallet_body = serde_json::json!({
-        "transactionTrackingRef": transaction_ref,
-        "lastName":               identity.last_name,
-        "otherNames":             other_names,
-        "phoneNo":                identity.phone_number,
-        "gender":                 gender_code,
-        "dateOfBirth":            date_of_birth,
-        "address":                address,
-        "email":                  email,
-    });
-
-    if identity.id_type == "NIN" {
-        open_wallet_body["nationalIdentityNo"] = serde_json::json!(identity.id_value);
-    } else {
-        open_wallet_body["bvn"] = serde_json::json!(identity.id_value);
-    }
-
-    let json = PsbClient::new(cfg)
-        .post(redis_conn, "/waas/api/v1/open_wallet", &open_wallet_body)
-        .await
-        .map_err(|e| format!("9PSB wallet open failed: {}", e))?;
-
-    let status_str = json["status"].as_str().unwrap_or("").to_uppercase();
-    if status_str != "SUCCESS" {
-        return Err(format!(
-            "9PSB rejected — status: '{}', message: '{}'",
-            status_str,
-            json["message"].as_str().unwrap_or("no message")
-        ));
-    }
-
-    let account_number = json["data"]["accountNumber"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let account_name = json["data"]["fullName"].as_str().unwrap_or("").to_string();
-
-    if account_number.is_empty() {
-        return Err("accountNumber empty in 9PSB response".into());
-    }
-
-    Ok((account_number, account_name))
-}
 
 pub async fn get_user_info(
     auth: AuthUser,
     db: web::Data<sqlx::PgPool>,
-    redis: web::Data<redis::aio::ConnectionManager>,
-    dojah: web::Data<DojahClient>,
-    cfg: web::Data<Config>,
+    redis: web::Data<redis::aio::ConnectionManager>
 ) -> impl Responder {
     let cache_key = format!("account:{}", auth.id);
     let mut redis_conn = redis.get_ref().clone();
 
-    let cached: Option<String> = match redis::cmd("GET")
-        .arg(&cache_key)
-        .query_async(&mut redis_conn)
-        .await
+    let cached: Option<String> = match
+        redis::cmd("GET").arg(&cache_key).query_async(&mut redis_conn).await
     {
         Ok(v) => v,
         Err(_) => None,
     };
 
     if let Some(data) = cached {
-        return HttpResponse::Ok().json(serde_json::json!({
+        return HttpResponse::Ok().json(
+            serde_json::json!({
             "status": "success",
             "data": serde_json::from_str::<serde_json::Value>(&data).unwrap_or_default()
-        }));
+        })
+        );
     }
 
     let account_uuid = match uuid::Uuid::parse_str(&auth.id) {
@@ -1390,30 +1098,31 @@ pub async fn get_user_info(
     };
 
     let (account, contact_history): (Result<_, sqlx::Error>, Result<_, sqlx::Error>) = tokio::join!(
-        sqlx::query!(
-            r#"SELECT id, email, firstname, lastname, othername, phone_number,
+        sqlx
+            ::query!(
+                r#"SELECT id, email, firstname, lastname, othername, phone_number,
                email_verified, phone_no_verified, status, account_type,
                is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,
                tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,
                panic_message, panic_activated_at, panic_deactivated_at,
                account_number, account_name, bvn, nin,
-               nin_userid, created_at, updated_at, referral_code,
-               kyc_reference, address, gender, date_of_birth
+               nin_userid, created_at, updated_at, referral_code
                FROM accounts WHERE id = $1"#,
-            account_uuid
-        )
-        .fetch_one(db.get_ref()),
-        sqlx::query!(
-            r#"SELECT id, field, old_value, new_value, registered_at, changed_at
+                account_uuid
+            )
+            .fetch_one(db.get_ref()),
+        sqlx
+            ::query!(
+                r#"SELECT id, field, old_value, new_value, registered_at, changed_at
                FROM account_contact_history
                WHERE account_id = $1
                ORDER BY registered_at DESC"#,
-            account_uuid
-        )
-        .fetch_all(db.get_ref())
+                account_uuid
+            )
+            .fetch_all(db.get_ref())
     );
 
-    let mut row = match account {
+    let row = match account {
         Ok(r) => r,
         Err(_) => {
             return HttpResponse::NotFound().json(ApiResponse {
@@ -1423,178 +1132,44 @@ pub async fn get_user_info(
         }
     };
 
-    // ── Resolve + open 9PSB wallet if not already opened ─────────────────────
-    if row.account_number.is_none() {
-        if let Some(kyc_reference) = row.kyc_reference.clone() {
-            eprintln!(
-                "[get_user_info] resolving identity for {} (kyc_reference={}) — checking kyc_verifications first",
-                account_uuid, kyc_reference
-            );
-
-            let identity_result: Result<Option<ResolvedIdentity>, String> =
-                match resolve_identity_from_db(db.get_ref(), account_uuid, &kyc_reference).await {
-                    Ok(Some(identity)) => {
-                        eprintln!(
-                            "[get_user_info] found completed verification in DB for {}",
-                            account_uuid
-                        );
-                        Ok(Some(identity))
-                    }
-                    Ok(None) => {
-                        eprintln!(
-                            "[get_user_info] no usable DB record for {} — falling back to live Dojah call",
-                            account_uuid
-                        );
-                        resolve_identity(dojah.get_ref(), &kyc_reference).await
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[get_user_info] kyc_verifications DB lookup errored for {}: {} — falling back to live Dojah call",
-                            account_uuid, e
-                        );
-                        resolve_identity(dojah.get_ref(), &kyc_reference).await
-                    }
-                };
-
-            match identity_result {
-                Ok(Some(identity)) => {
-                    eprintln!(
-                        "[get_user_info] resolved identity for {}: id_type={}, id_value={}",
-                        account_uuid, identity.id_type, identity.id_value
-                    );
-                    let address = row.address.clone().unwrap_or_default();
-
-                    match open_psb_wallet(cfg.get_ref(), &mut redis_conn, &identity, &row.email, &address).await {
-                        Ok((account_number, account_name)) => {
-                            eprintln!(
-                                "[get_user_info] 9PSB wallet opened for {}: account_number={}",
-                                account_uuid, account_number
-                            );
-
-                            let nin_val = if identity.id_type == "NIN" { Some(identity.id_value.clone()) } else { None };
-                            let bvn_val = if identity.id_type == "BVN" { Some(identity.id_value.clone()) } else { None };
-
-                            let update = sqlx::query!(
-                                r#"UPDATE accounts SET
-                                    account_number   = $1,
-                                    account_name     = $2,
-                                    bank_name        = '9PSB',
-                                    firstname        = COALESCE(firstname, $3),
-                                    lastname         = COALESCE(lastname, $4),
-                                    othername        = COALESCE(othername, $5),
-                                    phone_number      = COALESCE(phone_number, $6),
-                                    gender           = COALESCE(gender, $7),
-                                    date_of_birth    = COALESCE(date_of_birth, $8),
-                                    nin              = COALESCE(nin, $9),
-                                    bvn              = COALESCE(bvn, $10),
-                                    current_tier     = GREATEST(current_tier, 1),
-                                    tier_upgraded_at = NOW(),
-                                    updated_at       = NOW()
-                                WHERE id = $11"#,
-                                account_number,
-                                account_name,
-                                identity.first_name,
-                                identity.last_name,
-                                identity.middle_name,
-                                identity.phone_number,
-                                identity.gender,
-                                identity.date_of_birth,
-                                nin_val,
-                                bvn_val,
-                                account_uuid
-                            )
-                            .execute(db.get_ref())
-                            .await;
-
-                            match update {
-                                Ok(_) => {
-                                    row.account_number = Some(account_number);
-                                    row.account_name   = Some(account_name);
-                                    if row.firstname.is_none() { row.firstname = Some(identity.first_name.clone()); }
-                                    if row.lastname.is_none()  { row.lastname  = Some(identity.last_name.clone()); }
-                                    if row.othername.is_none() { row.othername = Some(identity.middle_name.clone()); }
-                                    if row.phone_number.is_none() { row.phone_number = Some(identity.phone_number.clone()); }
-                                    if row.gender.is_none() { row.gender = Some(identity.gender.clone()); }
-                                    if row.date_of_birth.is_none() { row.date_of_birth = Some(identity.date_of_birth.clone()); }
-                                    if row.nin.is_none() { row.nin = nin_val; }
-                                    if row.bvn.is_none() { row.bvn = bvn_val; }
-                                    row.current_tier = row.current_tier.max(1);
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[get_user_info] failed to persist wallet info for {}: {}",
-                                        account_uuid, e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("[get_user_info] wallet open failed for {}: {}", account_uuid, e);
-                        }
-                    }
-                }
-                Ok(None) => {
-                    eprintln!(
-                        "[get_user_info] identity not resolvable yet for {} (kyc_reference={})",
-                        account_uuid, kyc_reference
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[get_user_info] identity resolution failed for {} (kyc_reference={}): {}",
-                        account_uuid, kyc_reference, e
-                    );
-                }
-            }
-        } else {
-            eprintln!(
-                "[get_user_info] account {} has no kyc_reference set — skipping wallet resolution",
-                account_uuid
-            );
-        }
-    } else {
-        eprintln!(
-            "[get_user_info] account {} already has account_number={:?} — skipping wallet resolution",
-            account_uuid, row.account_number
-        );
-    }
-
     let history = match contact_history {
-        Ok(rows) => rows
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "id": h.id,
-                    "field": h.field,
-                    "old_value": h.old_value,
-                    "new_value": h.new_value,
-                    "registered_at": h.registered_at,
-                    "changed_at": h.changed_at,
+        Ok(rows) =>
+            rows
+                .iter()
+                .map(|h| {
+                    serde_json::json!({
+                        "id": h.id,
+                        "field": h.field,
+                        "old_value": h.old_value,
+                        "new_value": h.new_value,
+                        "registered_at": h.registered_at,
+                        "changed_at": h.changed_at,
+                    })
                 })
-            })
-            .collect::<Vec<_>>(),
+                .collect::<Vec<_>>(),
         Err(_) => vec![],
     };
 
     let today = chrono::Utc::now().format("%Y-%m-%d");
     let daily_key = format!("daily_txn_total:{}:{}", account_uuid, today);
 
-    let daily_total: f64 = redis::cmd("GET")
+    let daily_total: f64 = redis
+        ::cmd("GET")
         .arg(&daily_key)
-        .query_async(&mut redis_conn)
-        .await
+        .query_async(&mut redis_conn).await
         .unwrap_or(None)
         .unwrap_or(0.0);
 
     let daily_limit: Option<f64> = match row.current_tier {
         1 => Some(50_000.0),
         2 => Some(200_000.0),
-        _ => None,
+        _ => None, // tier 3 = unlimited
     };
 
     let exceeded_limit = daily_limit.map(|limit| daily_total >= limit);
 
-    let data = serde_json::json!({
+    let data =
+        serde_json::json!({
         "id": row.id,
         "email": row.email,
         "firstname": row.firstname,
@@ -1621,8 +1196,6 @@ pub async fn get_user_info(
         "bvn": row.bvn,
         "nin": row.nin,
         "nin_userid": row.nin_userid,
-        "gender": row.gender,
-        "date_of_birth": row.date_of_birth,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
         "referral_code": row.referral_code,
@@ -1632,20 +1205,22 @@ pub async fn get_user_info(
         "exceeded_limit":       exceeded_limit,
     });
 
-    if row.account_number.is_some() {
-        let _: Result<(), redis::RedisError> = redis::cmd("SETEX")
-            .arg(&cache_key)
-            .arg(300u64)
-            .arg(data.to_string())
-            .query_async(&mut redis_conn)
-            .await;
-    }
+    let _: Result<(), redis::RedisError> = redis
+        ::cmd("SETEX")
+        .arg(&cache_key)
+        .arg(300u64)
+        .arg(data.to_string())
+        .query_async(&mut redis_conn).await;
 
-    HttpResponse::Ok().json(serde_json::json!({
+    HttpResponse::Ok().json(
+        serde_json::json!({
         "status": "success",
         "data": data
-    }))
+    })
+    )
 }
+
+
 
 
 pub async fn verify_palmpayment(
