@@ -96,7 +96,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
             $12, $13, $14,
             $15, $16, $17, $18
         )
-        ON CONFLICT (reference_id) DO NOTHING
         RETURNING id
         "#,
         reference_id,
@@ -118,16 +117,10 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
         body,
         verified_at
     )
-    .fetch_optional(db.get_ref())
+    .fetch_one(db.get_ref())
     .await
     {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            return HttpResponse::Ok().json(serde_json::json!({
-                "status": "success",
-                "message": "Already processed"
-            }));
-        }
+        Ok(id) => id,
         Err(e) => {
             eprintln!("[dojah_webhook] DB insert error: {}", e);
             return HttpResponse::InternalServerError().json(serde_json::json!({
@@ -164,7 +157,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
                     image_url, app_id, customer_ref
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT (kyc_verification_id) DO NOTHING
                 "#,
                 kyc_id,
                 nin,
@@ -193,7 +185,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
             let middle_name = entity["middle_name"].as_str().map(str::to_string);
             let last_name = entity["last_name"].as_str().map(str::to_string);
             let gender = entity["gender"].as_str().map(str::to_string);
-            // BVN uses phone_number1 (primary), falls back to phone_number2
             let phone_number = entity["phone_number1"]
                 .as_str()
                 .or_else(|| entity["phone_number2"].as_str())
@@ -215,7 +206,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
                     image_url, app_id, customer_ref
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT (kyc_verification_id) DO NOTHING
                 "#,
                 kyc_id,
                 bvn,
@@ -246,6 +236,7 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
         "message": "Verification recorded"
     }))
 }
+
 
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
