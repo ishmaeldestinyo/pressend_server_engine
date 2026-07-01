@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at, referral_code\n               FROM accounts WHERE id = $1",
+  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at, referral_code,\n               kyc_reference, address, gender, date_of_birth\n               FROM accounts WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -147,6 +147,26 @@
         "ordinal": 28,
         "name": "referral_code",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 29,
+        "name": "kyc_reference",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 30,
+        "name": "address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 31,
+        "name": "gender",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 32,
+        "name": "date_of_birth",
+        "type_info": "Varchar"
       }
     ],
     "parameters": {
@@ -183,8 +203,12 @@
       true,
       false,
       false,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "259f87edd130bd7eef02b639bf21a80afab59ad6b93fd4f5d8990977b14d817d"
+  "hash": "263c465da697f308be0b0ae0c64075338001a23c0a1c47a036b8e3cc534f0f55"
 }

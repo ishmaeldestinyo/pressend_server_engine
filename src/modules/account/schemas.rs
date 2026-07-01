@@ -61,14 +61,7 @@ pub struct SignupRequest {
     pub reference: String, // dojah reference
 
     pub referral_code: Option<String>,
-
-    // #[validate(length(min = 2, max = 10, message = "Invalid international country code"))]
-    // pub intl_country_code: Option<String>, // e.g. "+233"
-
-    // #[validate(length(min = 2, max = 100, message = "Invalid country name"))]
-    // pub country_name: Option<String>, // e.g. "ghana"
 }
-
 
 
 #[derive(Deserialize, Serialize, Validate)]

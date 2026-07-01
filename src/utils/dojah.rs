@@ -150,7 +150,6 @@ pub struct BvnSelfieResponse {
 }
 
 // ─── Verification-by-reference models ──────────────────────────────────────
-// Used by GET /api/v1/kyc/verification?reference_id=...
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct NinEntity {
@@ -162,10 +161,9 @@ pub struct NinEntity {
     pub gender: Option<String>,
     pub birthdate: Option<String>,
     pub image_url: Option<String>,
-    pub residence_Town: Option<String>,
     pub residence_lga: Option<String>,
     pub residence_state: Option<String>,
-    pub residence_AddressLine1: Option<String>,
+    pub residence_address_line1: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -209,11 +207,33 @@ pub struct VerificationData {
     pub government_data: Option<GovernmentDataWrapper>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+// ─── FIX ─────────────────────────────────────────────────────────────────
+// Dojah's `/api/v1/kyc/verification` response wraps EVERYTHING (status,
+// id_type, verification_status, data) inside a top-level "entity" object.
+// Real shape:
+//   { "entity": { "status": true, "id_type": "NIN",
+//       "verification_status": "Completed", "data": { "government_data": {...} } } }
+//
+// The old VerificationResponse expected those fields at the ROOT, so serde
+// never errored (everything was Option/#[serde(default)]) — it just always
+// silently fell back to defaults (status=false, id_type=None, data=empty),
+// making every verification look "not usable yet" even when Dojah had
+// already returned a fully completed NIN/BVN match. Wrapping in
+// VerificationEntity to match the real payload fixes this.
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct VerificationResponse {
+    #[serde(default)]
+    pub entity: VerificationEntity,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct VerificationEntity {
+    #[serde(default)]
     pub status: bool,
     pub id_type: Option<String>,
+    #[serde(default)]
     pub verification_status: String,
+    #[serde(default)]
     pub data: VerificationData,
 }
 
@@ -227,10 +247,16 @@ pub struct DojahClient {
 
 impl DojahClient {
     pub fn new(cfg: Config) -> Self {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("failed to build reqwest client");
+
         Self {
             base_url: cfg.base_url.clone(),
             cfg,
-            http: Client::new(),
+            http,
         }
     }
 
@@ -293,6 +319,25 @@ impl DojahClient {
             .query(&[("reference_id", reference_id)])
             .send()
             .await?;
-        Self::handle(resp).await
+
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+
+        // TEMP DEBUG — remove once wallet flow is confirmed stable end-to-end.
+        eprintln!(
+            "[DojahClient::get_verification] status={} raw_body={}",
+            status,
+            String::from_utf8_lossy(&bytes)
+        );
+
+        if status.is_success() {
+            serde_json::from_slice(&bytes).map_err(|e| DojahError::Parse(e.to_string()))
+        } else {
+            let body: ApiErrorBody = serde_json::from_slice(&bytes).unwrap_or(ApiErrorBody {
+                error: Some(String::from_utf8_lossy(&bytes).into_owned()),
+                message: None,
+            });
+            Err(DojahError::Api { status: status.as_u16(), message: body.into_message() })
+        }
     }
 }

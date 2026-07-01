@@ -1,49 +1,36 @@
 use crate::config::Config;
 use crate::modules::legacy_plan::events::{
-    LegacyPlanBeneficiaryAddedEvent,
-    LegacyPlanBeneficiaryDeletedEvent,
+    LegacyPlanBeneficiaryAddedEvent, LegacyPlanBeneficiaryDeletedEvent,
 };
-use base64::Engine;
 use crate::modules::transactions::event::{
-    ExternalTransferInitiatedEvent,
-    InternalTransferInitiatedEvent,
+    ExternalTransferInitiatedEvent, InternalTransferInitiatedEvent,
 };
-use crate::modules::vas::events::{ AirtimePurchaseEvent, DataPurchaseEvent };
+use crate::modules::vas::events::{AirtimePurchaseEvent, DataPurchaseEvent};
 use crate::utils::fms::send_push_notification;
 use crate::utils::mailer::Mailer;
 use crate::utils::password_manager::hash_password;
 use crate::utils::psb::PsbClient;
 use crate::utils::vas::VasClient;
 use crate::worker_events::{
-    AccountLoggedInNotificationEvent,
-    ChangeEmailEvent,
-    ChangePasswordEvent,
-    DeleteAccountEvent,
-    InboundTransferEvent,
-    KycUpgradeStatusEvent,
-    NewDeviceLoginEvent,
-    SetPaymentPinEvent,
-    SignupEvent,
-    SuspiciousLoginEvent,
-    Tier2UpgradeEvent,
-    Tier3UpgradeEvent,
-    UpdateDeviceIdEvent,
+    AccountLoggedInNotificationEvent, ChangeEmailEvent, ChangePasswordEvent, DeleteAccountEvent,
+    InboundTransferEvent, KycUpgradeStatusEvent, NewDeviceLoginEvent, SetPaymentPinEvent,
+    SignupEvent, SuspiciousLoginEvent, Tier2UpgradeEvent, Tier3UpgradeEvent, UpdateDeviceIdEvent,
     VerifyEmailEvent,
 };
-use rand::{ Rng, distributions::Alphanumeric };
+use base64::Engine;
+use rand::{Rng, distributions::Alphanumeric};
 use redis::aio::ConnectionManager;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::str::FromStr;
 use uuid::Uuid;
 
-
 pub async fn handle_signup(
     payload: &str,
     db: &PgPool,
-    cfg: &Config,
+    _cfg: &Config,
     redis: &redis::aio::ConnectionManager,
-    mailer: &Mailer
+    mailer: &Mailer,
 ) {
     let event: SignupEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -52,8 +39,7 @@ pub async fn handle_signup(
         }
     };
 
-    let random_str: String = rand
-        ::thread_rng()
+    let random_str: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(6)
         .map(char::from)
@@ -63,9 +49,12 @@ pub async fn handle_signup(
     let referral_code = format!("PRS-{}", random_str);
 
     // ── 1. Check if email already exists ─────────────────────────────────────
-    let existing = sqlx
-        ::query!("SELECT id, email_verified FROM accounts WHERE email = $1", event.email)
-        .fetch_optional(db).await;
+    let existing = sqlx::query!(
+        "SELECT id, email_verified FROM accounts WHERE email = $1",
+        event.email
+    )
+    .fetch_optional(db)
+    .await;
 
     // account_id is set in one of two ways below and used for the referral insert
     let account_id: Uuid;
@@ -93,100 +82,19 @@ pub async fn handle_signup(
                 }
             };
 
-            // ── 3. Open 9PSB wallet BEFORE insert ────────────────────────────
             let new_id = Uuid::new_v4();
 
-            let gender_code = match event.gender.to_uppercase().as_str() {
-                "MALE" => 0,
-                "FEMALE" => 1,
-                _ => 0,
-            };
-
-            let other_names = format!("{} {}", event.firstname, event.middlename);
-
-            // convert date from yyyy-MM-dd to dd/MM/yyyy
-            let date_of_birth = {
-                let parts: Vec<&str> = event.date_of_birth.split('-').collect();
-                if parts.len() == 3 {
-                    format!("{}/{}/{}", parts[2], parts[1], parts[0])
-                } else {
-                    event.date_of_birth.clone()
-                }
-            };
-
-            // ── supply NIN or BVN — whichever was used during KYC ────────────
-            let mut open_wallet_body = serde_json::json!({
-                "transactionTrackingRef": new_id.to_string(),
-                "lastName":               event.lastname,
-                "otherNames":             other_names,
-                "phoneNo":                event.mobile_number,
-                "gender":                 gender_code,
-                "dateOfBirth":            date_of_birth,
-                "address":                event.address,
-                "email":                  event.email,
-            });
-
-            if let Some(ref nin) = event.nin {
-                open_wallet_body["nationalIdentityNo"] = serde_json::json!(nin);
-            } else if let Some(ref bvn) = event.bvn {
-                open_wallet_body["bvn"] = serde_json::json!(bvn);
-            }
-
-            println!(
-                "[worker/signup] 9PSB request body: {}",
-                serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
-            );
-
-            let mut redis_conn = redis.clone();
-            let json = match
-                PsbClient::new(cfg).post(
-                    &mut redis_conn,
-                    "/waas/api/v1/open_wallet",
-                    &open_wallet_body
-                ).await
-            {
-                Ok(j) => {
-                    println!(
-                        "[worker/signup] 9PSB full response: {}",
-                        serde_json::to_string_pretty(&j).unwrap_or_else(|_| j.to_string())
-                    );
-                    j
-                }
-                Err(e) => {
-                    println!("[worker/signup] 9PSB wallet open failed: {}", e);
-                    return;
-                }
-            };
-
-            let status_str = json["status"].as_str().unwrap_or("").to_uppercase();
-            if status_str != "SUCCESS" {
-                println!(
-                    "[worker/signup] 9PSB rejected — status: '{}', message: '{}', data: {}",
-                    status_str,
-                    json["message"].as_str().unwrap_or("no message"),
-                    serde_json::to_string_pretty(&json["data"]).unwrap_or_default()
-                );
-                return;
-            }
-
-            let account_number = json["data"]["accountNumber"].as_str().unwrap_or("").to_string();
-            let account_name   = json["data"]["fullName"].as_str().unwrap_or("").to_string();
-
-            if account_number.is_empty() {
-                println!("[worker/signup] accountNumber empty in 9PSB response");
-                return;
-            }
-
-            // ── 4. Single insert with everything ─────────────────────────────
+            // ── 3. Insert account — KYC identity fields are Option and stay
+            //    NULL until Dojah verification resolves them later. ──────────
             let result = sqlx::query!(
                 r#"
                 INSERT INTO accounts (
                     id, email, password_hash, device_id, account_type,
                     firstname, lastname, othername, phone_number,
                     date_of_birth, gender, nin, bvn, address,
-                    account_number, account_name, bank_name,
                     city, lga, state, user_photo,
-                    current_tier, tier_upgraded_at,
+                    kyc_reference,
+                    current_tier,
                     status, email_verified, referral_code,
                     referred_by
                 )
@@ -194,10 +102,10 @@ pub async fn handle_signup(
                     $1, $2, $3, $4, $5,
                     $6, $7, $8, $9,
                     $10, $11, $12, $13, $14,
-                    $15, $16, $17,
-                    $18, $19, $20, $21,
-                    1, NOW(),
-                    'active', false, $22, $23
+                    $15, $16, $17, $18,
+                    $19,
+                    0,
+                    'active', false, $20, $21
                 )
                 ON CONFLICT (email) DO NOTHING
                 RETURNING id
@@ -207,34 +115,35 @@ pub async fn handle_signup(
                 password_hash,
                 event.device_id,
                 event.account_type,
-                event.firstname,
-                event.lastname,
-                event.middlename,
-                event.mobile_number,
-                event.date_of_birth,
-                event.gender,
-                event.nin.as_deref(),           // None if BVN was used
-                event.bvn.as_deref(),           // None if NIN was used
-                event.address,
-                account_number,
-                account_name,
-                "9PSB",
-                event.city,
-                event.lga,
-                event.state,
-                event.user_photo,
+                event.firstname.as_deref(),
+                event.lastname.as_deref(),
+                event.middlename.as_deref(),
+                event.mobile_number.as_deref(),
+                event.date_of_birth.as_deref(),
+                event.gender.as_deref(),
+                event.nin.as_deref(),
+                event.bvn.as_deref(),
+                event.address.as_deref(),
+                event.city.as_deref(),
+                event.lga.as_deref(),
+                event.state.as_deref(),
+                event.user_photo.as_deref(),
+                event.kyc_reference,
                 referral_code,
-                event.referrer_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+                event
+                    .referrer_id
+                    .as_deref()
+                    .and_then(|s| Uuid::parse_str(s).ok())
             )
-            .fetch_optional(db).await;
+            .fetch_optional(db)
+            .await;
 
             match result {
                 Ok(Some(row)) => {
                     account_id = row.id;
                     println!(
-                        "[worker/signup] Account created with wallet — email: {}, account_number: {}",
-                        event.email,
-                        account_number
+                        "[worker/signup] Account created — email: {}, kyc_reference: {}",
+                        event.email, event.kyc_reference
                     );
                 }
                 Ok(None) => {
@@ -242,7 +151,8 @@ pub async fn handle_signup(
                         "SELECT id FROM accounts WHERE email = $1",
                         event.email
                     )
-                    .fetch_one(db).await
+                    .fetch_one(db)
+                    .await
                     {
                         Ok(id) => {
                             account_id = id;
@@ -261,7 +171,7 @@ pub async fn handle_signup(
         }
     }
 
-    // ── 5. Insert referral row if referred ───────────────────────────────────
+    // ── 4. Insert referral row if referred ───────────────────────────────────
     if let Some(referrer_id_str) = &event.referrer_id {
         if let Ok(referrer_uuid) = Uuid::parse_str(referrer_id_str) {
             if let Err(e) = sqlx::query!(
@@ -273,20 +183,20 @@ pub async fn handle_signup(
                 referrer_uuid,
                 account_id
             )
-            .execute(db).await
+            .execute(db)
+            .await
             {
                 eprintln!("[worker/signup] referral insert error: {}", e);
             } else {
                 eprintln!(
                     "[worker/signup] referral recorded — referrer: {}, referred: {}",
-                    referrer_uuid,
-                    account_id
+                    referrer_uuid, account_id
                 );
             }
         }
     }
 
-    // ── 6. Generate + hash OTP ────────────────────────────────────────────────
+    // ── 5. Generate + hash OTP ────────────────────────────────────────────────
     let otp = generate_otp();
 
     let otp_hash = match hash_password(&otp) {
@@ -297,16 +207,20 @@ pub async fn handle_signup(
         }
     };
 
-    // ── 7. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
+    // ── 6. Store hashed OTP in Redis — TTL 10 minutes ────────────────────────
     let mut redis_conn = redis.clone();
     match redis::cmd("SETEX")
         .arg(&event.otp_redis_key)
         .arg(600u64)
         .arg(&otp_hash)
-        .query_async::<_, ()>(&mut redis_conn).await
+        .query_async::<_, ()>(&mut redis_conn)
+        .await
     {
         Ok(_) => {
-            println!("[worker/signup] OTP stored in Redis: {}", event.otp_redis_key);
+            println!(
+                "[worker/signup] OTP stored in Redis: {}",
+                event.otp_redis_key
+            );
         }
         Err(e) => {
             println!("[worker/signup] Redis OTP save failed: {}", e);
@@ -314,8 +228,12 @@ pub async fn handle_signup(
         }
     }
 
-    // ── 8. Send OTP email ─────────────────────────────────────────────────────
-    if let Err(e) = mailer.send_otp(&event.email, &event.firstname, &otp).await {
+    // ── 7. Send OTP email ─────────────────────────────────────────────────────
+    // firstname isn't known yet at this stage (resolved later via KYC),
+    // so fall back to a generic greeting if it's still None.
+    let greeting_name = event.firstname.as_deref().unwrap_or("there");
+
+    if let Err(e) = mailer.send_otp(&event.email, greeting_name, &otp).await {
         println!("[worker/signup] OTP email send failed: {}", e);
     } else {
         println!("[worker/signup] OTP email sent to: {}", event.email);
@@ -327,7 +245,7 @@ pub async fn handle_signup(
 pub async fn handle_resend_otp(
     payload: &str,
     redis: &redis::aio::ConnectionManager,
-    mailer: &Mailer
+    mailer: &Mailer,
 ) {
     #[derive(Deserialize)]
     struct ResendOtpEvent {
@@ -354,13 +272,12 @@ pub async fn handle_resend_otp(
     };
 
     let mut redis_conn = redis.clone();
-    match
-        redis
-            ::cmd("SETEX")
-            .arg(&event.otp_redis_key)
-            .arg(600u64)
-            .arg(&otp_hash)
-            .query_async::<_, ()>(&mut redis_conn).await
+    match redis::cmd("SETEX")
+        .arg(&event.otp_redis_key)
+        .arg(600u64)
+        .arg(&otp_hash)
+        .query_async::<_, ()>(&mut redis_conn)
+        .await
     {
         Ok(_) => println!("[worker/resend_otp] OTP stored: {}", event.otp_redis_key),
         Err(e) => println!("[worker/resend_otp] Redis store error: {}", e),
@@ -374,9 +291,8 @@ pub async fn handle_resend_otp(
 }
 
 pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
-    let result = sqlx
-        ::query!(
-            r#"
+    let result = sqlx::query!(
+        r#"
         UPDATE referrals
         SET
             status     = CASE
@@ -400,18 +316,22 @@ pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
         WHERE referred_id = $1
           AND status NOT IN ('disqualified', 'qualified')
         "#,
-            account_uuid
-        )
-        .execute(db).await;
+        account_uuid
+    )
+    .execute(db)
+    .await;
 
     match result {
         Ok(r) if r.rows_affected() > 0 => {
             // check if they just qualified (not disqualified)
-            let status = sqlx
-                ::query_scalar!("SELECT status FROM referrals WHERE referred_id = $1", account_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten();
+            let status = sqlx::query_scalar!(
+                "SELECT status FROM referrals WHERE referred_id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
 
             if status.as_deref() == Some("qualified") {
                 log::info!("[referral] qualified — referred_id={}", account_uuid);
@@ -424,17 +344,22 @@ pub async fn advance_referral_vas(db: &PgPool, account_uuid: uuid::Uuid) {
             }
         }
         Ok(_) => {}
-        Err(e) =>
-            log::error!("[referral] vas upsert failed for referred_id={}: {}", account_uuid, e),
+        Err(e) => log::error!(
+            "[referral] vas upsert failed for referred_id={}: {}",
+            account_uuid,
+            e
+        ),
     }
 }
 
 async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     // Get this user's referrer
-    let referrer_id = match
-        sqlx
-            ::query_scalar!("SELECT referrer_id FROM referrals WHERE referred_id = $1", account_uuid)
-            .fetch_optional(db).await
+    let referrer_id = match sqlx::query_scalar!(
+        "SELECT referrer_id FROM referrals WHERE referred_id = $1",
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(id)) => id,
         _ => {
@@ -443,18 +368,17 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     };
 
     // Count unrewarded qualified referrals in batches of 5
-    let count = match
-        sqlx
-            ::query_scalar!(
-                r#"
+    let count = match sqlx::query_scalar!(
+        r#"
         SELECT COUNT(*) FROM referrals
         WHERE referrer_id = $1
           AND status      = 'qualified'
           AND rewarded    = false
         "#,
-                referrer_id
-            )
-            .fetch_one(db).await
+        referrer_id
+    )
+    .fetch_one(db)
+    .await
     {
         Ok(Some(n)) => n,
         _ => {
@@ -476,9 +400,8 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     };
 
     // Lock and mark exactly 5 rows
-    let marked = sqlx
-        ::query!(
-            r#"
+    let marked = sqlx::query!(
+        r#"
         UPDATE referrals
         SET rewarded    = true,
             rewarded_at = NOW(),
@@ -493,9 +416,10 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
             FOR UPDATE SKIP LOCKED
         )
         "#,
-            referrer_id
-        )
-        .execute(&mut *tx).await;
+        referrer_id
+    )
+    .execute(&mut *tx)
+    .await;
 
     match marked {
         Ok(r) if r.rows_affected() == 5 => {}
@@ -516,16 +440,15 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     }
 
     // Insert reward row
-    if
-        let Err(e) = sqlx
-            ::query!(
-                r#"
+    if let Err(e) = sqlx::query!(
+        r#"
         INSERT INTO referral_rewards (referrer_id, amount, currency, referral_count, status)
         VALUES ($1, 1000, 'NGN', 5, 'pending')
         "#,
-                referrer_id
-            )
-            .execute(&mut *tx).await
+        referrer_id
+    )
+    .execute(&mut *tx)
+    .await
     {
         log::error!("[referral] reward insert failed: {}", e);
         let _ = tx.rollback().await;
@@ -533,7 +456,10 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     }
 
     match tx.commit().await {
-        Ok(_) => log::info!("[referral] ₦1000 reward queued for referrer={}", referrer_id),
+        Ok(_) => log::info!(
+            "[referral] ₦1000 reward queued for referrer={}",
+            referrer_id
+        ),
         Err(e) => log::error!("[referral] reward commit failed: {}", e),
     }
 }
@@ -547,10 +473,12 @@ pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         }
     };
 
-    match
-        sqlx
-            ::query!("UPDATE accounts SET email_verified = true WHERE email = $1", event.email)
-            .execute(db).await
+    match sqlx::query!(
+        "UPDATE accounts SET email_verified = true WHERE email = $1",
+        event.email
+    )
+    .execute(db)
+    .await
     {
         Ok(_) => {
             println!("[worker/verify_email] Email verified: {}", event.email);
@@ -599,22 +527,20 @@ pub async fn handle_change_password(payload: &str, db: &PgPool, mailer: &Mailer)
 
     // ── Update password + insert contact history concurrently ─────────────────
     let (update, history): (Result<_, sqlx::Error>, Result<_, sqlx::Error>) = tokio::join!(
-        sqlx
-            ::query!(
-                "UPDATE accounts SET password_hash = $1, updated_at = NOW() WHERE id = $2",
-                new_hash,
-                account_uuid
-            )
-            .execute(db),
-        sqlx
-            ::query!(
-                r#"INSERT INTO account_contact_history
+        sqlx::query!(
+            "UPDATE accounts SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+            new_hash,
+            account_uuid
+        )
+        .execute(db),
+        sqlx::query!(
+            r#"INSERT INTO account_contact_history
                (account_id, field, old_value, new_value, changed_at)
                VALUES ($1, 'password', '[hashed]', '[hashed]', NOW())
                ON CONFLICT (account_id, field, old_value, new_value) DO NOTHING"#,
-                account_uuid
-            )
-            .execute(db)
+            account_uuid
+        )
+        .execute(db)
     );
 
     if let Err(e) = update {
@@ -652,18 +578,18 @@ pub async fn handle_delete_account(payload: &str, db: &PgPool, mailer: &Mailer) 
     };
 
     // ── Soft delete account ───────────────────────────────────────────────────
-    let update = sqlx
-        ::query!(
-            r#"UPDATE accounts
+    let update = sqlx::query!(
+        r#"UPDATE accounts
            SET deleted_at = NOW(),
                deleted_reason = $1,
                status = 'deleted',
                updated_at = NOW()
            WHERE id = $2 AND deleted_at IS NULL"#,
-            event.deletion_reason,
-            account_uuid
-        )
-        .execute(db).await;
+        event.deletion_reason,
+        account_uuid
+    )
+    .execute(db)
+    .await;
 
     if let Err(e) = update {
         println!("[worker/delete_account] DB error: {}", e);
@@ -671,7 +597,10 @@ pub async fn handle_delete_account(payload: &str, db: &PgPool, mailer: &Mailer) 
     }
 
     // ── Send deletion confirmation email ──────────────────────────────────────
-    if let Err(e) = mailer.send_account_deleted(&event.email, "", event.deletion_reason).await {
+    if let Err(e) = mailer
+        .send_account_deleted(&event.email, "", event.deletion_reason)
+        .await
+    {
         println!("[worker/delete_account] Email error: {}", e);
     }
 
@@ -687,7 +616,10 @@ pub async fn handle_suspicious_login(payload: &str, mailer: &Mailer) {
         }
     };
 
-    if let Err(e) = mailer.send_suspicious_login(&event.email, &event.firstname, &event.ip).await {
+    if let Err(e) = mailer
+        .send_suspicious_login(&event.email, &event.firstname, &event.ip)
+        .await
+    {
         println!("[worker/suspicious_login] Email error: {}", e);
     }
 
@@ -705,19 +637,12 @@ pub async fn handle_new_device_login(payload: &str, mailer: &Mailer) {
 
     println!(
         "[worker/new_device_login] email: {}, otp: {}, ip: {}, firstname: {}",
-        event.email,
-        event.otp,
-        event.ip,
-        event.firstname
+        event.email, event.otp, event.ip, event.firstname
     );
 
-    if
-        let Err(e) = mailer.send_new_device_otp(
-            &event.email,
-            &event.firstname,
-            &event.otp,
-            &event.ip
-        ).await
+    if let Err(e) = mailer
+        .send_new_device_otp(&event.email, &event.firstname, &event.otp, &event.ip)
+        .await
     {
         println!("[worker/new_device_login] Email error: {:#?}", e);
     }
@@ -742,13 +667,13 @@ pub async fn handle_device_update(payload: &str, db: &PgPool) {
         }
     };
 
-    let result = sqlx
-        ::query!(
-            "UPDATE accounts SET device_id = $1, updated_at = NOW() WHERE id = $2",
-            event.new_device_id,
-            account_uuid
-        )
-        .execute(db).await;
+    let result = sqlx::query!(
+        "UPDATE accounts SET device_id = $1, updated_at = NOW() WHERE id = $2",
+        event.new_device_id,
+        account_uuid
+    )
+    .execute(db)
+    .await;
 
     match result {
         Ok(_) => println!("[worker/device_update] Done: {}", event.email),
@@ -765,17 +690,17 @@ pub async fn handle_account_loggedin_notification(payload: &str, mailer: &Mailer
         }
     };
 
-    if
-        let Err(e) = mailer.send_account_loggedin_email(
-            &event.email,
-            &event.firstname,
-            &event.ip
-        ).await
+    if let Err(e) = mailer
+        .send_account_loggedin_email(&event.email, &event.firstname, &event.ip)
+        .await
     {
         println!("[worker/logged_in_notification] Email error: {}", e);
     }
 
-    println!("[worker/account_loggedin_notification] Done: {}", event.email);
+    println!(
+        "[worker/account_loggedin_notification] Done: {}",
+        event.email
+    );
 }
 
 pub async fn handle_change_email(payload: &str, db: &PgPool, mailer: &Mailer) {
@@ -799,24 +724,22 @@ pub async fn handle_change_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
         Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
     ) = tokio::join!(
-        sqlx
-            ::query!(
-                "UPDATE accounts SET email = $1, updated_at = NOW() WHERE id = $2",
-                event.new_email,
-                account_uuid
-            )
-            .execute(db),
-        sqlx
-            ::query!(
-                r#"INSERT INTO account_contact_history
+        sqlx::query!(
+            "UPDATE accounts SET email = $1, updated_at = NOW() WHERE id = $2",
+            event.new_email,
+            account_uuid
+        )
+        .execute(db),
+        sqlx::query!(
+            r#"INSERT INTO account_contact_history
        (account_id, field, old_value, new_value, changed_at)
        VALUES ($1, 'email', $2, $3, NOW())
        ON CONFLICT (account_id, field, old_value, new_value) DO NOTHING"#,
-                account_uuid,
-                event.old_email,
-                event.new_email
-            )
-            .execute(db)
+            account_uuid,
+            event.old_email,
+            event.new_email
+        )
+        .execute(db)
     );
 
     if let Err(e) = update {
@@ -828,17 +751,17 @@ pub async fn handle_change_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         println!("[worker/change_email] History insert error: {}", e);
     }
 
-    if
-        let Err(e) = mailer.send_email_changed(
-            &event.new_email,
-            &event.firstname,
-            &event.old_email
-        ).await
+    if let Err(e) = mailer
+        .send_email_changed(&event.new_email, &event.firstname, &event.old_email)
+        .await
     {
         println!("[worker/change_email] Email error: {}", e);
     }
 
-    println!("[worker/change_email] Done: {} -> {}", event.old_email, event.new_email);
+    println!(
+        "[worker/change_email] Done: {} -> {}",
+        event.old_email, event.new_email
+    );
 }
 
 pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mailer) {
@@ -853,23 +776,28 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
     let account_uuid = match uuid::Uuid::parse_str(&event.account_id) {
         Ok(id) => id,
         Err(_) => {
-            log::warn!("[worker/kyc_upgrade_status] Invalid account_id: {}", event.account_id);
+            log::warn!(
+                "[worker/kyc_upgrade_status] Invalid account_id: {}",
+                event.account_id
+            );
             return;
         }
     };
 
     // ── Fetch account for email + firstname ───────────────────────────────────
-    let row = match
-        sqlx
-            ::query!(
-                "SELECT email, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-                account_uuid
-            )
-            .fetch_optional(db).await
+    let row = match sqlx::query!(
+        "SELECT email, firstname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            log::warn!("[worker/kyc_upgrade_status] Account not found: {}", event.account_id);
+            log::warn!(
+                "[worker/kyc_upgrade_status] Account not found: {}",
+                event.account_id
+            );
             return;
         }
         Err(e) => {
@@ -884,9 +812,8 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
         // ── Read pending_tier_upgrade into current_tier BEFORE nulling it ─────
         // Postgres evaluates all RHS values before applying writes,
         // so current_tier = pending_tier_upgrade safely captures the old value.
-        let result = sqlx
-            ::query!(
-                r#"UPDATE accounts SET
+        let result = sqlx::query!(
+            r#"UPDATE accounts SET
                 current_tier              = pending_tier_upgrade,
                 pending_tier_upgrade      = NULL,
                 tier_upgrade_requested_at = NULL,
@@ -895,11 +822,12 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
                 account_name              = $2,
                 updated_at                = NOW()
             WHERE id = $3"#,
-                event.account_number,
-                event.account_name,
-                account_uuid
-            )
-            .execute(db).await;
+            event.account_number,
+            event.account_name,
+            account_uuid
+        )
+        .execute(db)
+        .await;
 
         match result {
             Ok(_) => {
@@ -908,12 +836,9 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
                     event.tier,
                     event.account_id
                 );
-                if
-                    let Err(e) = mailer.send_tier_upgrade_approved(
-                        &row.email,
-                        &firstname,
-                        event.tier as u8
-                    ).await
+                if let Err(e) = mailer
+                    .send_tier_upgrade_approved(&row.email, &firstname, event.tier as u8)
+                    .await
                 {
                     log::error!("[worker/kyc_upgrade_status] Email error: {}", e);
                 }
@@ -922,16 +847,16 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
         }
     } else {
         // ── Rejected — clear both pending fields ──────────────────────────────
-        let result = sqlx
-            ::query!(
-                r#"UPDATE accounts SET
+        let result = sqlx::query!(
+            r#"UPDATE accounts SET
                 pending_tier_upgrade      = NULL,
                 tier_upgrade_requested_at = NULL,
                 updated_at                = NOW()
             WHERE id = $1"#,
-                account_uuid
-            )
-            .execute(db).await;
+            account_uuid
+        )
+        .execute(db)
+        .await;
 
         match result {
             Ok(_) => {
@@ -941,13 +866,14 @@ pub async fn handle_kyc_upgrade_status(payload: &str, db: &PgPool, mailer: &Mail
                     event.account_id,
                     event.message
                 );
-                if
-                    let Err(e) = mailer.send_tier_upgrade_rejected(
+                if let Err(e) = mailer
+                    .send_tier_upgrade_rejected(
                         &row.email,
                         &firstname,
                         event.tier as u8,
-                        event.message.as_deref()
-                    ).await
+                        event.message.as_deref(),
+                    )
+                    .await
                 {
                     log::error!("[worker/kyc_upgrade_status] Email error: {}", e);
                 }
@@ -961,7 +887,7 @@ pub async fn handle_tier2_upgrade(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: Tier2UpgradeEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -1000,7 +926,10 @@ pub async fn handle_tier2_upgrade(
     };
 
     if row.status != "active" {
-        eprintln!("[worker/tier2_upgrade] Account not active: {}", event.account_id);
+        eprintln!(
+            "[worker/tier2_upgrade] Account not active: {}",
+            event.account_id
+        );
         return;
     }
 
@@ -1013,12 +942,18 @@ pub async fn handle_tier2_upgrade(
     }
 
     if row.current_tier >= 2 {
-        eprintln!("[worker/tier2_upgrade] Already tier 2+: {}", event.account_id);
+        eprintln!(
+            "[worker/tier2_upgrade] Already tier 2+: {}",
+            event.account_id
+        );
         return;
     }
 
     if row.pending_tier_upgrade.is_some() {
-        eprintln!("[worker/tier2_upgrade] Upgrade already in progress: {}", event.account_id);
+        eprintln!(
+            "[worker/tier2_upgrade] Upgrade already in progress: {}",
+            event.account_id
+        );
         return;
     }
 
@@ -1042,23 +977,28 @@ pub async fn handle_tier2_upgrade(
             "[worker/tier2_upgrade] userPhoto is a URL, fetching and converting to base64..."
         );
         match reqwest::get(&event.user_photo).await {
-            Ok(resp) =>
-                match resp.bytes().await {
-                    Ok(bytes) => {
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        eprintln!(
-                            "[worker/tier2_upgrade] userPhoto converted, base64 len: {}",
-                            b64.len()
-                        );
-                        b64
-                    }
-                    Err(e) => {
-                        eprintln!("[worker/tier2_upgrade] Failed to read userPhoto bytes: {}", e);
-                        event.user_photo.clone()
-                    }
+            Ok(resp) => match resp.bytes().await {
+                Ok(bytes) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    eprintln!(
+                        "[worker/tier2_upgrade] userPhoto converted, base64 len: {}",
+                        b64.len()
+                    );
+                    b64
                 }
+                Err(e) => {
+                    eprintln!(
+                        "[worker/tier2_upgrade] Failed to read userPhoto bytes: {}",
+                        e
+                    );
+                    event.user_photo.clone()
+                }
+            },
             Err(e) => {
-                eprintln!("[worker/tier2_upgrade] Failed to fetch userPhoto URL: {}", e);
+                eprintln!(
+                    "[worker/tier2_upgrade] Failed to fetch userPhoto URL: {}",
+                    e
+                );
                 event.user_photo.clone()
             }
         }
@@ -1068,17 +1008,16 @@ pub async fn handle_tier2_upgrade(
     };
 
     // ── Set pending ───────────────────────────────────────────────────────────
-    if
-        let Err(e) = sqlx
-            ::query!(
-                r#"UPDATE accounts SET
+    if let Err(e) = sqlx::query!(
+        r#"UPDATE accounts SET
             pending_tier_upgrade = 2,
             tier_upgrade_requested_at = NOW(),
             updated_at = NOW()
         WHERE id = $1"#,
-                account_uuid
-            )
-            .execute(db).await
+        account_uuid
+    )
+    .execute(db)
+    .await
     {
         eprintln!("[worker/tier2_upgrade] Failed to set pending: {}", e);
         return;
@@ -1087,8 +1026,7 @@ pub async fn handle_tier2_upgrade(
     // ── Call 9PSB wallet_upgrade ──────────────────────────────────────────────
     let psb = PsbClient::new(cfg);
 
-    let upgrade_body =
-        serde_json::json!({
+    let upgrade_body = serde_json::json!({
         "accountNumber": account_number,
         "bvn": event.bvn,
         "nin": event.nin,
@@ -1130,11 +1068,17 @@ pub async fn handle_tier2_upgrade(
     eprintln!("  nearestLandmark:        {}", event.nearest_landmark);
     eprintln!("  userPhoto len:          {}", user_photo_base64.len());
     eprintln!("  idCardFront len:        {}", event.id_card_front.len());
-    eprintln!("  customerSignature len:  {}", event.customer_signature.len());
+    eprintln!(
+        "  customerSignature len:  {}",
+        event.customer_signature.len()
+    );
     eprintln!("  utilityBill len:        {}", event.utility_bill.len());
     eprintln!("[worker/tier2_upgrade] ─────────────────────────────────────");
 
-    match psb.post(redis, "/waas/api/v1/wallet_upgrade", &upgrade_body).await {
+    match psb
+        .post(redis, "/waas/api/v1/wallet_upgrade", &upgrade_body)
+        .await
+    {
         Ok(json) => {
             eprintln!("[worker/tier2_upgrade] wallet_upgrade response: {:?}", json);
 
@@ -1168,7 +1112,7 @@ pub async fn handle_tier3_upgrade(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: Tier3UpgradeEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -1187,19 +1131,21 @@ pub async fn handle_tier3_upgrade(
     };
 
     // ── Fetch account ─────────────────────────────────────────────────────────
-    let row = match
-        sqlx
-            ::query!(
-                "SELECT current_tier, status, pending_tier_upgrade, email,
+    let row = match sqlx::query!(
+        "SELECT current_tier, status, pending_tier_upgrade, email,
                 account_number, account_name, bvn, nin
          FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-                account_uuid
-            )
-            .fetch_optional(db).await
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            println!("[worker/tier3_upgrade] Account not found: {}", event.account_id);
+            println!(
+                "[worker/tier3_upgrade] Account not found: {}",
+                event.account_id
+            );
             return;
         }
         Err(e) => {
@@ -1210,7 +1156,10 @@ pub async fn handle_tier3_upgrade(
 
     // ── Guards ────────────────────────────────────────────────────────────────
     if row.status != "active" {
-        println!("[worker/tier3_upgrade] Account not active: {}", event.account_id);
+        println!(
+            "[worker/tier3_upgrade] Account not active: {}",
+            event.account_id
+        );
         return;
     }
 
@@ -1223,19 +1172,28 @@ pub async fn handle_tier3_upgrade(
     }
 
     if row.current_tier >= 3 {
-        println!("[worker/tier3_upgrade] Already tier 3: {}", event.account_id);
+        println!(
+            "[worker/tier3_upgrade] Already tier 3: {}",
+            event.account_id
+        );
         return;
     }
 
     if row.pending_tier_upgrade.is_some() {
-        println!("[worker/tier3_upgrade] Upgrade already in progress: {}", event.account_id);
+        println!(
+            "[worker/tier3_upgrade] Upgrade already in progress: {}",
+            event.account_id
+        );
         return;
     }
 
     let account_number = match row.account_number.clone() {
         Some(n) => n,
         None => {
-            println!("[worker/tier3_upgrade] No account number: {}", event.account_id);
+            println!(
+                "[worker/tier3_upgrade] No account number: {}",
+                event.account_id
+            );
             return;
         }
     };
@@ -1245,42 +1203,44 @@ pub async fn handle_tier3_upgrade(
     let nin = event.nin.clone().or(row.nin.clone()).unwrap_or_default();
 
     if bvn.is_empty() || nin.is_empty() {
-        println!("[worker/tier3_upgrade] Missing BVN or NIN: {}", event.account_id);
+        println!(
+            "[worker/tier3_upgrade] Missing BVN or NIN: {}",
+            event.account_id
+        );
         return;
     }
 
     // ── Set pending ───────────────────────────────────────────────────────────
-    if
-        let Err(e) = sqlx
-            ::query!(
-                r#"UPDATE accounts SET
+    if let Err(e) = sqlx::query!(
+        r#"UPDATE accounts SET
             pending_tier_upgrade = 3,
             tier_upgrade_requested_at = NOW(),
             updated_at = NOW()
         WHERE id = $1"#,
-                account_uuid
-            )
-            .execute(db).await
+        account_uuid
+    )
+    .execute(db)
+    .await
     {
         println!("[worker/tier3_upgrade] Failed to set pending: {}", e);
         return;
     }
 
     // ── Call 9PSB wallet_upgrade ──────────────────────────────────────────────
-    let upgrade_body =
-        serde_json::json!({
+    let upgrade_body = serde_json::json!({
         "accountNumber": account_number,
         "bvn":           bvn,
         "nin":           nin,
         "proofOfAddressVerification": event.proof_of_address,
     });
 
-    match
-        PsbClient::new(cfg).post(
+    match PsbClient::new(cfg)
+        .post(
             redis,
             "/waas/api/v1/walletUpgrade-tier3-base64",
-            &upgrade_body
-        ).await
+            &upgrade_body,
+        )
+        .await
     {
         Ok(json) => {
             println!("[worker/tier3_upgrade] wallet_upgrade response: {:?}", json);
@@ -1305,12 +1265,12 @@ pub async fn handle_tier3_upgrade(
         }
         Err(e) => {
             println!("[worker/tier3_upgrade] wallet_upgrade error: {}", e);
-            let _ = sqlx
-                ::query!(
-                    "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
-                    account_uuid
-                )
-                .execute(db).await;
+            let _ = sqlx::query!(
+                "UPDATE accounts SET pending_tier_upgrade = NULL, updated_at = NOW() WHERE id = $1",
+                account_uuid
+            )
+            .execute(db)
+            .await;
         }
     }
 }
@@ -1333,17 +1293,19 @@ pub async fn handle_legacy_beneficiary_added(payload: &str, db: &PgPool, mailer:
     };
 
     // ── Fetch owner name once ─────────────────────────────────────────────────
-    let owner = match
-        sqlx
-            ::query!(
-                "SELECT firstname, lastname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
-                account_uuid
-            )
-            .fetch_optional(db).await
+    let owner = match sqlx::query!(
+        "SELECT firstname, lastname FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(r)) => r,
         _ => {
-            println!("[worker/legacy_beneficiary_added] Owner not found: {}", event.account_id);
+            println!(
+                "[worker/legacy_beneficiary_added] Owner not found: {}",
+                event.account_id
+            );
             return;
         }
     };
@@ -1353,20 +1315,24 @@ pub async fn handle_legacy_beneficiary_added(payload: &str, db: &PgPool, mailer:
         owner.firstname.unwrap_or_default(),
         owner.lastname.unwrap_or_default()
     )
-        .trim()
-        .to_string();
+    .trim()
+    .to_string();
 
     // ── Send email to each beneficiary ────────────────────────────────────────
     for kin in &event.next_of_kin {
-        if
-            let Err(e) = mailer.send_legacy_beneficiary_added(
+        if let Err(e) = mailer
+            .send_legacy_beneficiary_added(
                 &kin.email,
                 &kin.fullname,
                 &owner_name,
-                kin.share_percentage
-            ).await
+                kin.share_percentage,
+            )
+            .await
         {
-            println!("[worker/legacy_beneficiary_added] Email failed for {}: {}", kin.email, e);
+            println!(
+                "[worker/legacy_beneficiary_added] Email failed for {}: {}",
+                kin.email, e
+            );
         }
     }
 
@@ -1395,14 +1361,19 @@ pub async fn handle_legacy_beneficiary_deleted(payload: &str, db: &PgPool, maile
     };
 
     // ── Fetch owner name once ─────────────────────────────────────────────────
-    let owner = match
-        sqlx
-            ::query!("SELECT firstname, lastname FROM accounts WHERE id = $1", account_uuid)
-            .fetch_optional(db).await
+    let owner = match sqlx::query!(
+        "SELECT firstname, lastname FROM accounts WHERE id = $1",
+        account_uuid
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(r)) => r,
         _ => {
-            println!("[worker/legacy_beneficiary_deleted] Owner not found: {}", event.account_id);
+            println!(
+                "[worker/legacy_beneficiary_deleted] Owner not found: {}",
+                event.account_id
+            );
             return;
         }
     };
@@ -1412,19 +1383,19 @@ pub async fn handle_legacy_beneficiary_deleted(payload: &str, db: &PgPool, maile
         owner.firstname.unwrap_or_default(),
         owner.lastname.unwrap_or_default()
     )
-        .trim()
-        .to_string();
+    .trim()
+    .to_string();
 
     // ── Send email to each beneficiary ────────────────────────────────────────
     for kin in &event.next_of_kin {
-        if
-            let Err(e) = mailer.send_legacy_beneficiary_deleted(
-                &kin.email,
-                &kin.fullname,
-                &owner_name
-            ).await
+        if let Err(e) = mailer
+            .send_legacy_beneficiary_deleted(&kin.email, &kin.fullname, &owner_name)
+            .await
         {
-            println!("[worker/legacy_beneficiary_deleted] Email failed for {}: {}", kin.email, e);
+            println!(
+                "[worker/legacy_beneficiary_deleted] Email failed for {}: {}",
+                kin.email, e
+            );
         }
     }
 
@@ -1439,14 +1410,23 @@ pub async fn handle_set_payment_pin(payload: &str, mailer: &Mailer) {
     let event: SetPaymentPinEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
-            println!("[handle_set_payment_pin] Failed to deserialize payload: {}", e);
+            println!(
+                "[handle_set_payment_pin] Failed to deserialize payload: {}",
+                e
+            );
             return;
         }
     };
 
-    println!("[handle_set_payment_pin] Sending PIN set notification to {}", event.email);
+    println!(
+        "[handle_set_payment_pin] Sending PIN set notification to {}",
+        event.email
+    );
 
-    if let Err(e) = mailer.send_payment_pin_set(&event.email, &event.firstname).await {
+    if let Err(e) = mailer
+        .send_payment_pin_set(&event.email, &event.firstname)
+        .await
+    {
         println!("[handle_set_payment_pin] Mailer error: {}", e);
     }
 }
@@ -1455,7 +1435,7 @@ pub async fn handle_internal_transfer(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: InternalTransferInitiatedEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -1482,8 +1462,7 @@ pub async fn handle_internal_transfer(
     // ── Format amount once for reuse across notifications ─────────────────────
 
     // ── 1. PSB debit sender ───────────────────────────────────────────────────
-    let debit_payload =
-        serde_json::json!({
+    let debit_payload = serde_json::json!({
         "accountNo":     event.sender_account,
         "narration":     event.narration,
         "totalAmount":   event.amount.parse::<f64>().unwrap_or(0.0),
@@ -1495,7 +1474,10 @@ pub async fn handle_internal_transfer(
         }
     });
 
-    match PsbClient::new(cfg).post(redis, "/waas/api/v1/debit/transfer", &debit_payload).await {
+    match PsbClient::new(cfg)
+        .post(redis, "/waas/api/v1/debit/transfer", &debit_payload)
+        .await
+    {
         Ok(res) => {
             let status = res["status"].as_str().unwrap_or("").to_uppercase();
             if status != "SUCCESS" {
@@ -1507,8 +1489,9 @@ pub async fn handle_internal_transfer(
                     "debit",
                     &event.amount,
                     &event.narration,
-                    "failed"
-                ).await;
+                    "failed",
+                )
+                .await;
                 return;
             }
         }
@@ -1520,8 +1503,7 @@ pub async fn handle_internal_transfer(
     // ── 2. PSB credit reciever ────────────────────────────────────────────────
     let credit_ref = format!("{}-CR", event.reference);
 
-    let credit_payload =
-        serde_json::json!({
+    let credit_payload = serde_json::json!({
         "accountNo":     event.recipient_account,
         "narration":     event.narration,
         "totalAmount":   event.amount.parse::<f64>().unwrap_or(0.0),
@@ -1533,7 +1515,10 @@ pub async fn handle_internal_transfer(
         }
     });
 
-    match PsbClient::new(cfg).post(redis, "/waas/api/v1/credit/transfer", &credit_payload).await {
+    match PsbClient::new(cfg)
+        .post(redis, "/waas/api/v1/credit/transfer", &credit_payload)
+        .await
+    {
         Ok(res) => {
             let status = res["status"].as_str().unwrap_or("").to_uppercase();
             if status != "SUCCESS" {
@@ -1562,12 +1547,15 @@ pub async fn handle_internal_transfer(
                     )
                 );
                 // ── Notify sender only — credit failed so reciever gets nothing ─
-                let sender_token = sqlx
-                    ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
-                    .fetch_optional(db).await
-                    .ok()
-                    .flatten()
-                    .flatten();
+                let sender_token = sqlx::query_scalar!(
+                    "SELECT device_token FROM accounts WHERE id = $1",
+                    sender_uuid
+                )
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten()
+                .flatten();
 
                 if let Some(token) = sender_token {
                     send_push_notification(
@@ -1577,17 +1565,16 @@ pub async fn handle_internal_transfer(
                             "Your transfer of ₦{} could not be completed. You will be refunded.",
                             &event.amount
                         ),
-                        Some(
-                            serde_json::json!({
+                        Some(serde_json::json!({
                             "route":     "NotificationDetail",
                             "service":   "transfer_sent",
                             "status":    "failed",
                             "amount":    &event.amount,
                             "reference": event.reference,
                             "narration": "Transfer could not be completed. Refund in progress.",
-                        })
-                        )
-                    ).await;
+                        })),
+                    )
+                    .await;
                 }
                 return;
             }
@@ -1629,19 +1616,19 @@ pub async fn handle_internal_transfer(
     let daily_key = format!("daily_txn_total:{}:{}", sender_uuid, today);
     let mut redis_daily = redis.clone();
 
-    let new_total: Result<f64, redis::RedisError> = redis
-        ::cmd("INCRBYFLOAT")
+    let new_total: Result<f64, redis::RedisError> = redis::cmd("INCRBYFLOAT")
         .arg(&daily_key)
         .arg(amount_f64)
-        .query_async(&mut redis_daily).await;
+        .query_async(&mut redis_daily)
+        .await;
 
     match new_total {
         Ok(total) => {
-            let _: Result<(), _> = redis
-                ::cmd("EXPIRE")
+            let _: Result<(), _> = redis::cmd("EXPIRE")
                 .arg(&daily_key)
                 .arg(86400i64)
-                .query_async(&mut redis_daily).await;
+                .query_async(&mut redis_daily)
+                .await;
             log::info!(
                 "[worker/internal_transfer] daily total for {} is now {}",
                 sender_uuid,
@@ -1666,13 +1653,19 @@ pub async fn handle_internal_transfer(
 
     // ── 5. Push notification — sender only ────────────────────────────────────
     // Receiver credit alert is handled by  via PSB webhook
-    let sender_info = sqlx
-        ::query!("SELECT device_token, firstname, lastname FROM accounts WHERE id = $1", sender_uuid)
-        .fetch_optional(db).await;
+    let sender_info = sqlx::query!(
+        "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
+        sender_uuid
+    )
+    .fetch_optional(db)
+    .await;
 
-    let reciever_info = sqlx
-        ::query!("SELECT firstname, lastname FROM accounts WHERE id = $1", reciever_uuid)
-        .fetch_optional(db).await;
+    let reciever_info = sqlx::query!(
+        "SELECT firstname, lastname FROM accounts WHERE id = $1",
+        reciever_uuid
+    )
+    .fetch_optional(db)
+    .await;
 
     // ── Build recipient display name for sender notification ──────────────────
     let recipient_display_name = match &reciever_info {
@@ -1682,8 +1675,8 @@ pub async fn handle_internal_transfer(
                 row.firstname.as_deref().unwrap_or(""),
                 row.lastname.as_deref().unwrap_or("")
             )
-                .trim()
-                .to_string();
+            .trim()
+            .to_string();
             if name.is_empty() {
                 event.recipient_account.clone()
             } else {
@@ -1699,27 +1692,26 @@ pub async fn handle_internal_transfer(
             send_push_notification(
                 token,
                 "Transfer Successful",
-                &format!("₦{} sent successfully to {}", &event.amount, recipient_display_name),
-                Some(
-                    serde_json::json!({
+                &format!(
+                    "₦{} sent successfully to {}",
+                    &event.amount, recipient_display_name
+                ),
+                Some(serde_json::json!({
                     "route":     "NotificationDetail",
                     "service":   "transfer_sent",
                     "status":    "success",
                     "amount":    &event.amount,
                     "reference": event.reference,
                     "recipient": recipient_display_name,
-                })
-                )
-            ).await;
+                })),
+            )
+            .await;
         }
     }
 
     println!(
         "[worker/internal_transfer] ── Complete — ref: {}, sender: {}, reciever: {}, amount: {} ──",
-        event.reference,
-        event.sender_account,
-        event.recipient_account,
-        event.amount
+        event.reference, event.sender_account, event.recipient_account, event.amount
     );
 }
 
@@ -1727,7 +1719,7 @@ pub async fn handle_transfer_inflow(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: InboundTransferEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -1743,14 +1735,21 @@ pub async fn handle_transfer_inflow(
     let is_above_10k = amount_f64 > 10_000.0;
 
     // ── Check if transactionref already exists in our system ─────────────────
-    let existing = sqlx
-        ::query!("SELECT id, status FROM transactions WHERE reference = $1", event.transaction_ref)
-        .fetch_optional(db).await
-        .unwrap_or(None);
+    let existing = sqlx::query!(
+        "SELECT id, status FROM transactions WHERE reference = $1",
+        event.transaction_ref
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap_or(None);
 
     if let Some(tx) = existing {
         let status_str = event.status.as_deref().unwrap_or("").to_lowercase();
-        let new_status = if status_str == "failed" { "failed" } else { "success" };
+        let new_status = if status_str == "failed" {
+            "failed"
+        } else {
+            "success"
+        };
 
         // ── Idempotency check — if status hasn't changed, webhook fired twice ─
         if tx.status == new_status {
@@ -1762,9 +1761,8 @@ pub async fn handle_transfer_inflow(
         }
 
         // ── Status actually changed — update only, no notification ────────────
-        let update = sqlx
-            ::query!(
-                r#"
+        let update = sqlx::query!(
+            r#"
             UPDATE transactions
             SET
                 status     = $1,
@@ -1772,52 +1770,51 @@ pub async fn handle_transfer_inflow(
                 meta       = meta || $2::jsonb
             WHERE id = $3
             "#,
-                new_status,
-                serde_json::json!({
+            new_status,
+            serde_json::json!({
                 "psb_transaction_ref": event.transaction_ref,
                 "nip_session_id":      event.session_id,
                 "sender_name":         event.sender_name,
                 "sender_account":      event.sender_account,
                 "sender_bank":         event.sender_bank,
             }),
-                tx.id
-            )
-            .execute(db).await;
+            tx.id
+        )
+        .execute(db)
+        .await;
 
         match update {
-            Ok(_) =>
-                println!(
-                    "[worker/transfer_inflow] Updated transaction — ref: {}, status: {}",
-                    event.transaction_ref,
-                    new_status
-                ),
-            Err(e) =>
-                println!(
-                    "[worker/transfer_inflow] DB update error — ref: {}, err: {}",
-                    event.transaction_ref,
-                    e
-                ),
+            Ok(_) => println!(
+                "[worker/transfer_inflow] Updated transaction — ref: {}, status: {}",
+                event.transaction_ref, new_status
+            ),
+            Err(e) => println!(
+                "[worker/transfer_inflow] DB update error — ref: {}, err: {}",
+                event.transaction_ref, e
+            ),
         }
 
         return;
     }
 
     // ── transactionref not found — external inbound transfer ──────────────────
-    let receiver = match
-        sqlx
-            ::query!(
-                r#"
+    let receiver = match sqlx::query!(
+        r#"
         SELECT id, device_token, account_type, account_name
         FROM accounts
         WHERE account_number = $1 AND deleted_at IS NULL
         "#,
-                event.account_number
-            )
-            .fetch_optional(db).await
+        event.account_number
+    )
+    .fetch_optional(db)
+    .await
     {
         Ok(Some(r)) => r,
         Ok(None) => {
-            println!("[worker/transfer_inflow] Account not found: {}", event.account_number);
+            println!(
+                "[worker/transfer_inflow] Account not found: {}",
+                event.account_number
+            );
             return;
         }
         Err(e) => {
@@ -1830,9 +1827,8 @@ pub async fn handle_transfer_inflow(
     let should_charge_fee = is_business && is_above_10k;
 
     // ── Insert external inflow as credit transaction ───────────────────────────
-    let result = sqlx
-        ::query!(
-            r#"
+    let result = sqlx::query!(
+        r#"
         INSERT INTO transactions (
             sender_id,
             reciever_id,
@@ -1854,22 +1850,23 @@ pub async fn handle_transfer_inflow(
         )
         ON CONFLICT (reference) DO NOTHING
         "#,
-            None as Option<uuid::Uuid>,
-            Some(receiver.id) as Option<uuid::Uuid>,
-            event.transaction_ref,
-            amount_bd,
-            event.narration,
-            event.account_number,
-            receiver.account_name.clone().unwrap_or_default(),
-            serde_json::json!({
+        None as Option<uuid::Uuid>,
+        Some(receiver.id) as Option<uuid::Uuid>,
+        event.transaction_ref,
+        amount_bd,
+        event.narration,
+        event.account_number,
+        receiver.account_name.clone().unwrap_or_default(),
+        serde_json::json!({
             "sender_name":     event.sender_name,
             "sender_account":  event.sender_account,
             "sender_bank":     event.sender_bank,
             "transaction_ref": event.transaction_ref,
             "nip_session_id":  event.session_id,
         })
-        )
-        .execute(db).await;
+    )
+    .execute(db)
+    .await;
 
     match result {
         Ok(r) if r.rows_affected() == 0 => {
@@ -1880,13 +1877,10 @@ pub async fn handle_transfer_inflow(
             );
             return;
         }
-        Ok(_) =>
-            println!(
-                "[worker/transfer_inflow] External inflow recorded — ref: {}, account: {}, amount: ₦{}",
-                event.transaction_ref,
-                event.account_number,
-                &event.amount
-            ),
+        Ok(_) => println!(
+            "[worker/transfer_inflow] External inflow recorded — ref: {}, account: {}, amount: ₦{}",
+            event.transaction_ref, event.account_number, &event.amount
+        ),
         Err(e) => {
             println!("[worker/transfer_inflow] DB insert error: {}", e);
             return;
@@ -1899,18 +1893,20 @@ pub async fn handle_transfer_inflow(
 
         // ── Guard: skip entirely if fee was already processed (prevents double
         //    notification when the webhook is delivered more than once) ─────────
-        let fee_exists = sqlx
-            ::query!("SELECT id FROM transactions WHERE reference = $1", fee_ref)
-            .fetch_optional(db).await
+        let fee_exists = sqlx::query!("SELECT id FROM transactions WHERE reference = $1", fee_ref)
+            .fetch_optional(db)
+            .await
             .unwrap_or(None);
 
         if fee_exists.is_some() {
-            println!("[worker/transfer_inflow] Fee already processed — skipping — ref: {}", fee_ref);
+            println!(
+                "[worker/transfer_inflow] Fee already processed — skipping — ref: {}",
+                fee_ref
+            );
         } else {
             let receiver_name = receiver.account_name.clone().unwrap_or_default();
 
-            let fee_payload =
-                serde_json::json!({
+            let fee_payload = serde_json::json!({
                 "accountNo":     event.account_number,
                 "narration":     "Incoming transfer processing fee",
                 "totalAmount":   "1",
@@ -1922,8 +1918,9 @@ pub async fn handle_transfer_inflow(
                 }
             });
 
-            match
-                PsbClient::new(cfg).post(redis, "/waas/api/v1/debit/transfer", &fee_payload).await
+            match PsbClient::new(cfg)
+                .post(redis, "/waas/api/v1/debit/transfer", &fee_payload)
+                .await
             {
                 Ok(res) => {
                     let status = res["status"].as_str().unwrap_or("").to_uppercase();
@@ -1931,12 +1928,13 @@ pub async fn handle_transfer_inflow(
                         println!("[worker/transfer_inflow] Fee deducted — ref: {}", fee_ref);
 
                         let fee_bd = bigdecimal::BigDecimal::from_str("35").unwrap_or_default();
-                        let fee_narration =
-                            format!("Processed fee for ₦35 of {} credit alert greater than 10,000", receiver_name);
+                        let fee_narration = format!(
+                            "Processed fee for ₦35 of {} credit alert greater than 10,000",
+                            receiver_name
+                        );
 
-                        let _: Result<_, _> = sqlx
-                            ::query!(
-                                r#"
+                        let _: Result<_, _> = sqlx::query!(
+                            r#"
                             INSERT INTO transactions (
                                 sender_id,
                                 reciever_id,
@@ -1953,20 +1951,21 @@ pub async fn handle_transfer_inflow(
                                     $4, 'success', 'internal', $5)
                             ON CONFLICT (reference) DO NOTHING
                             "#,
-                                Some(receiver.id) as Option<uuid::Uuid>,
-                                fee_ref,
-                                fee_bd,
-                                fee_narration,
-                                serde_json::json!({
+                            Some(receiver.id) as Option<uuid::Uuid>,
+                            fee_ref,
+                            fee_bd,
+                            fee_narration,
+                            serde_json::json!({
                                 "fee_type":   "incoming_transfer_fee",
                                 "linked_ref": event.transaction_ref,
                                 "fee_amount": "35.00",
                             })
-                            )
-                            .execute(db).await
-                            .map_err(|e|
-                                println!("[worker/transfer_inflow] Fee DB insert error: {}", e)
-                            );
+                        )
+                        .execute(db)
+                        .await
+                        .map_err(|e| {
+                            println!("[worker/transfer_inflow] Fee DB insert error: {}", e)
+                        });
 
                         // ── Notify business owner about fee ────────────────────
                         if let Some(token) = &receiver.device_token {
@@ -1976,12 +1975,9 @@ pub async fn handle_transfer_inflow(
                                 &format!(
                                     "A processing fee of ₦35.00 has been deducted from your \
                                      account for an incoming transfer of ₦{} from {} ({}).",
-                                    &event.amount,
-                                    event.sender_name,
-                                    event.sender_bank
+                                    &event.amount, event.sender_name, event.sender_bank
                                 ),
-                                Some(
-                                    serde_json::json!({
+                                Some(serde_json::json!({
                                     "route":     "NotificationDetail",
                                     "service":   "transfer_fee",
                                     "status":    "success",
@@ -1991,24 +1987,21 @@ pub async fn handle_transfer_inflow(
                                         "Processing fee for ₦{} inflow from {} · {}",
                                         &event.amount, event.sender_name, event.sender_bank
                                     ),
-                                })
-                                )
-                            ).await;
+                                })),
+                            )
+                            .await;
                         }
                     } else {
                         println!(
                             "[worker/transfer_inflow] Fee rejected by PSB — status: '{}', ref: {}",
-                            status,
-                            fee_ref
+                            status, fee_ref
                         );
                     }
                 }
-                Err(e) =>
-                    println!(
-                        "[worker/transfer_inflow] Fee PSB error — ref: {}, err: {}",
-                        fee_ref,
-                        e
-                    ),
+                Err(e) => println!(
+                    "[worker/transfer_inflow] Fee PSB error — ref: {}, err: {}",
+                    fee_ref, e
+                ),
             }
         }
     }
@@ -2022,9 +2015,7 @@ pub async fn handle_transfer_inflow(
                     "Your wallet has been credited with ₦{}. \
                      A processing fee of ₦35.00 was applied as this transfer exceeds ₦10,000. \
                      Sent by: {} ({}).",
-                    &event.amount,
-                    event.sender_name,
-                    event.sender_bank
+                    &event.amount, event.sender_name, event.sender_bank
                 ),
             )
         } else {
@@ -2033,9 +2024,7 @@ pub async fn handle_transfer_inflow(
                 format!(
                     "Your wallet has been credited with ₦{}. \
                      Sent by: {} ({}).",
-                    &event.amount,
-                    event.sender_name,
-                    event.sender_bank
+                    &event.amount, event.sender_name, event.sender_bank
                 ),
             )
         };
@@ -2044,8 +2033,7 @@ pub async fn handle_transfer_inflow(
             token,
             title,
             &body,
-            Some(
-                serde_json::json!({
+            Some(serde_json::json!({
                 "route":     "NotificationDetail",
                 "service":   "transfer_received",
                 "status":    "success",
@@ -2053,17 +2041,14 @@ pub async fn handle_transfer_inflow(
                 "reference": event.transaction_ref,
                 "sender":    event.sender_name,
                 "narration": format!("From {} · {}", event.sender_name, event.sender_bank),
-            })
-            )
-        ).await;
+            })),
+        )
+        .await;
     }
 
     println!(
         "[worker/transfer_inflow] ── Complete — ref: {}, account: {}, amount: ₦{}, fee_charged: {} ──",
-        event.transaction_ref,
-        event.account_number,
-        &event.amount,
-        should_charge_fee
+        event.transaction_ref, event.account_number, &event.amount, should_charge_fee
     );
 }
 
@@ -2077,28 +2062,28 @@ async fn insert_transaction(
     tx_type: &str,
     amount: &str,
     narration: &str,
-    status: &str
+    status: &str,
 ) -> Result<(), sqlx::Error> {
     let amount_bd = bigdecimal::BigDecimal::from_str(amount).unwrap_or_default();
 
-    sqlx
-        ::query!(
-            r#"
+    sqlx::query!(
+        r#"
         INSERT INTO transactions
             (sender_id, reciever_id, reference, type, amount, currency, narration, status, channel)
         VALUES
             ($1, $2, $3, $4, $5, 'NGN', $6, $7, 'internal')
         ON CONFLICT (reference) DO NOTHING
         "#,
-            sender_uuid,
-            reciever_uuid,
-            reference,
-            tx_type,
-            amount_bd,
-            narration,
-            status
-        )
-        .execute(db).await?;
+        sender_uuid,
+        reciever_uuid,
+        reference,
+        tx_type,
+        amount_bd,
+        narration,
+        status
+    )
+    .execute(db)
+    .await?;
 
     Ok(())
 }
@@ -2107,7 +2092,7 @@ pub async fn handle_external_transfer(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: ExternalTransferInitiatedEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -2127,8 +2112,7 @@ pub async fn handle_external_transfer(
 
     // ── Format amount once for reuse across notifications ─────────────────────
     // ── Call 9PSB wallet_other_banks ──────────────────────────────────────────
-    let psb_payload =
-        serde_json::json!({
+    let psb_payload = serde_json::json!({
         "customer": {
             "account": {
                 "bank":                event.bank_code,
@@ -2151,13 +2135,16 @@ pub async fn handle_external_transfer(
         "merchant": {
             "isFee":              false,
             "merchantFeeAccount": "",
-            "merchantFeeAmount":  "" 
+            "merchantFeeAmount":  ""
         }
     });
 
     let amount_bd = bigdecimal::BigDecimal::from_str(&event.amount).unwrap_or_default();
 
-    match PsbClient::new(cfg).post(redis, "/waas/api/v1/wallet_other_banks", &psb_payload).await {
+    match PsbClient::new(cfg)
+        .post(redis, "/waas/api/v1/wallet_other_banks", &psb_payload)
+        .await
+    {
         Ok(res) => {
             println!("[worker/external_transfer] PSB response: {:?}", res);
 
@@ -2170,9 +2157,7 @@ pub async fn handle_external_transfer(
                     format!(
                         "Dear valued customer, your transfer of ₦{} to {} has been \
                          completed successfully. Reference: {}.",
-                        &event.amount,
-                        event.recipient_name,
-                        event.reference
+                        &event.amount, event.recipient_name, event.reference
                     ),
                 )
             } else {
@@ -2183,17 +2168,14 @@ pub async fn handle_external_transfer(
                         "Dear valued customer, we were unable to process your transfer \
                          of ₦{} to {}. Please try again or contact support if the issue \
                          persists. Reference: {}.",
-                        &event.amount,
-                        event.recipient_name,
-                        event.reference
+                        &event.amount, event.recipient_name, event.reference
                     ),
                 )
             };
 
             // ── Record transaction ────────────────────────────────────────────
-            let _ = sqlx
-                ::query!(
-                    r#"
+            let _ = sqlx::query!(
+                r#"
                 INSERT INTO transactions
                     (sender_id, reciever_id, reference, type, amount, currency,
                      narration, status, channel,
@@ -2204,23 +2186,24 @@ pub async fn handle_external_transfer(
                      $6, $7, $8, $9)
                 ON CONFLICT (reference) DO NOTHING
                 "#,
-                    sender_uuid,
-                    event.reference,
-                    amount_bd,
-                    event.narration,
-                    tx_status,
-                    event.recipient_number,
-                    event.recipient_name,
-                    event.bank_code,
-                    serde_json::json!({
+                sender_uuid,
+                event.reference,
+                amount_bd,
+                event.narration,
+                tx_status,
+                event.recipient_number,
+                event.recipient_name,
+                event.bank_code,
+                serde_json::json!({
                     "recipient_name":   event.recipient_name,
                     "recipient_number": event.recipient_number,
                     "bank_code":        event.bank_code,
                     "psb_response_code": res["responseCode"].as_str().unwrap_or(""),
                 })
-                )
-                .execute(db).await
-                .map_err(|e| println!("[worker/external_transfer] DB insert error: {}", e));
+            )
+            .execute(db)
+            .await
+            .map_err(|e| println!("[worker/external_transfer] DB insert error: {}", e));
 
             // ── Track sender's daily transaction total in Redis ───────────────────────
             let amount_f64 = event.amount.parse::<f64>().unwrap_or(0.0);
@@ -2228,19 +2211,19 @@ pub async fn handle_external_transfer(
             let daily_key = format!("daily_txn_total:{}:{}", sender_uuid, today);
             let mut redis_daily = redis.clone();
 
-            let new_total: Result<f64, redis::RedisError> = redis
-                ::cmd("INCRBYFLOAT")
+            let new_total: Result<f64, redis::RedisError> = redis::cmd("INCRBYFLOAT")
                 .arg(&daily_key)
                 .arg(amount_f64)
-                .query_async(&mut redis_daily).await;
+                .query_async(&mut redis_daily)
+                .await;
 
             match new_total {
                 Ok(total) => {
-                    let _: Result<(), _> = redis
-                        ::cmd("EXPIRE")
+                    let _: Result<(), _> = redis::cmd("EXPIRE")
                         .arg(&daily_key)
                         .arg(86400i64)
-                        .query_async(&mut redis_daily).await;
+                        .query_async(&mut redis_daily)
+                        .await;
                     log::info!(
                         "[worker/external_transfer] daily total for {} is now {}",
                         sender_uuid,
@@ -2257,12 +2240,15 @@ pub async fn handle_external_transfer(
             }
 
             // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", sender_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten()
-                .flatten();
+            let token = sqlx::query_scalar!(
+                "SELECT device_token FROM accounts WHERE id = $1",
+                sender_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
             if let Some(token) = token {
                 send_push_notification(
@@ -2285,15 +2271,13 @@ pub async fn handle_external_transfer(
 
             println!(
                 "[worker/external_transfer] ── Complete — ref: {}, status: {} ──",
-                event.reference,
-                tx_status
+                event.reference, tx_status
             );
         }
         Err(e) => {
             println!(
                 "[worker/external_transfer] PSB error — ref: {}, error: {}",
-                event.reference,
-                e
+                event.reference, e
             );
         }
     }
@@ -2303,7 +2287,7 @@ pub async fn handle_airtime_purchase(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: AirtimePurchaseEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -2315,11 +2299,7 @@ pub async fn handle_airtime_purchase(
 
     println!(
         "[worker/airtime_purchase] Processing — account: {}, phone: {}, network: {}, amount: {}, ref: {}",
-        event.account_number,
-        event.phone_number,
-        event.network,
-        event.amount,
-        event.reference
+        event.account_number, event.phone_number, event.network, event.amount, event.reference
     );
 
     let account_uuid = match uuid::Uuid::parse_str(&event.account_id) {
@@ -2333,8 +2313,7 @@ pub async fn handle_airtime_purchase(
     let amount_bd = bigdecimal::BigDecimal::from_str(&event.amount).unwrap_or_default();
 
     // ── Call VAS ──────────────────────────────────────────────────────────────
-    let vas_payload =
-        serde_json::json!({
+    let vas_payload = serde_json::json!({
         "phoneNumber":          event.phone_number,
         "network":              event.network,
         "amount":               event.amount,
@@ -2342,15 +2321,21 @@ pub async fn handle_airtime_purchase(
         "transactionReference": event.reference,
     });
 
-    match VasClient::new(cfg).post(redis, "/vas/api/v1/topup/airtime", &vas_payload).await {
+    match VasClient::new(cfg)
+        .post(redis, "/vas/api/v1/topup/airtime", &vas_payload)
+        .await
+    {
         Ok(res) => {
             let vas_status = res["status"].as_str().unwrap_or("").to_uppercase();
-            let tx_status = if vas_status == "SUCCESS" { "success" } else { "failed" };
+            let tx_status = if vas_status == "SUCCESS" {
+                "success"
+            } else {
+                "failed"
+            };
 
             // ── Save to vas_transactions ──────────────────────────────────────
-            let _ = sqlx
-                ::query!(
-                    r#"
+            let _ = sqlx::query!(
+                r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
                      reference, debit_account, status, response_code, response_message, meta)
@@ -2358,22 +2343,23 @@ pub async fn handle_airtime_purchase(
                     ($1, 'airtime', $2, $3, $4, 'NGN', $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (reference) DO NOTHING
                 "#,
-                    account_uuid,
-                    event.network,
-                    event.phone_number,
-                    amount_bd,
-                    event.reference,
-                    event.account_number,
-                    tx_status,
-                    res["responseCode"].as_str().unwrap_or(""),
-                    res["message"].as_str().unwrap_or(""),
-                    serde_json::json!({
+                account_uuid,
+                event.network,
+                event.phone_number,
+                amount_bd,
+                event.reference,
+                event.account_number,
+                tx_status,
+                res["responseCode"].as_str().unwrap_or(""),
+                res["message"].as_str().unwrap_or(""),
+                serde_json::json!({
                     "phone_number": event.phone_number,
                     "network":      event.network,
                 })
-                )
-                .execute(db).await
-                .map_err(|e| println!("[worker/airtime_purchase] DB insert error: {}", e));
+            )
+            .execute(db)
+            .await
+            .map_err(|e| println!("[worker/airtime_purchase] DB insert error: {}", e));
 
             // ── Referral: advance VAS milestone ──────────────────────────────────────────
             if tx_status == "success" {
@@ -2384,12 +2370,15 @@ pub async fn handle_airtime_purchase(
             }
 
             // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten()
-                .flatten();
+            let token = sqlx::query_scalar!(
+                "SELECT device_token FROM accounts WHERE id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
             if let Some(token) = token {
                 let (title, body) = if vas_status == "SUCCESS" {
@@ -2397,9 +2386,7 @@ pub async fn handle_airtime_purchase(
                         "Airtime Purchase Successful",
                         format!(
                             "Dear valued customer, your airtime recharge of ₦{} to {} ({}) has been completed successfully.",
-                            event.amount,
-                            event.phone_number,
-                            event.network
+                            event.amount, event.phone_number, event.network
                         ),
                     )
                 } else {
@@ -2407,9 +2394,7 @@ pub async fn handle_airtime_purchase(
                         "Airtime Purchase Unsuccessful",
                         format!(
                             "Dear valued customer, we were unable to process your airtime recharge of ₦{} to {}. Please try again or contact support. Reference: {}.",
-                            event.amount,
-                            event.phone_number,
-                            event.reference
+                            event.amount, event.phone_number, event.reference
                         ),
                     )
                 };
@@ -2418,8 +2403,7 @@ pub async fn handle_airtime_purchase(
                     &token,
                     title,
                     &body,
-                    Some(
-                        serde_json::json!({
+                    Some(serde_json::json!({
                         "route":     "NotificationDetail",
                         "service":   "airtime_purchase",
                         "status":    tx_status,
@@ -2427,28 +2411,25 @@ pub async fn handle_airtime_purchase(
                         "reference": event.reference,
                         "recipient": event.phone_number,
                         "network":   event.network,
-                    })
-                    )
-                ).await;
+                    })),
+                )
+                .await;
             }
 
             println!(
                 "[worker/airtime_purchase] ── Complete — ref: {}, status: {} ──",
-                event.reference,
-                tx_status
+                event.reference, tx_status
             );
         }
         Err(e) => {
             println!(
                 "[worker/airtime_purchase] VAS error — ref: {}, error: {}",
-                event.reference,
-                e
+                event.reference, e
             );
 
             // ── Save failed attempt ───────────────────────────────────────────
-            let _ = sqlx
-                ::query!(
-                    r#"
+            let _ = sqlx::query!(
+                r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
                      reference, debit_account, status, response_message)
@@ -2456,24 +2437,28 @@ pub async fn handle_airtime_purchase(
                     ($1, 'airtime', $2, $3, $4, 'NGN', $5, $6, 'failed', $7)
                 ON CONFLICT (reference) DO NOTHING
                 "#,
-                    account_uuid,
-                    event.network,
-                    event.phone_number,
-                    amount_bd,
-                    event.reference,
-                    event.account_number,
-                    e.to_string()
-                )
-                .execute(db).await
-                .map_err(|e| println!("[worker/airtime_purchase] DB failed insert error: {}", e));
+                account_uuid,
+                event.network,
+                event.phone_number,
+                amount_bd,
+                event.reference,
+                event.account_number,
+                e.to_string()
+            )
+            .execute(db)
+            .await
+            .map_err(|e| println!("[worker/airtime_purchase] DB failed insert error: {}", e));
 
             // ── Push notification — failed ─────────────────────────────────────
-            let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten()
-                .flatten();
+            let token = sqlx::query_scalar!(
+                "SELECT device_token FROM accounts WHERE id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
             if let Some(token) = token {
                 send_push_notification(
@@ -2506,7 +2491,7 @@ pub async fn handle_data_purchase(
     payload: &str,
     db: &PgPool,
     cfg: &Config,
-    redis: &mut ConnectionManager
+    redis: &mut ConnectionManager,
 ) {
     let event: DataPurchaseEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -2527,8 +2512,7 @@ pub async fn handle_data_purchase(
     let amount_bd = bigdecimal::BigDecimal::from_str(&event.amount).unwrap_or_default();
 
     // ── Call VAS ──────────────────────────────────────────────────────────────
-    let vas_payload =
-        serde_json::json!({
+    let vas_payload = serde_json::json!({
         "phoneNumber":          event.phone_number,
         "network":              event.network,
         "productId":            event.product_id,
@@ -2537,15 +2521,21 @@ pub async fn handle_data_purchase(
         "transactionReference": event.reference,
     });
 
-    match VasClient::new(cfg).post(redis, "/vas/api/v1/topup/data", &vas_payload).await {
+    match VasClient::new(cfg)
+        .post(redis, "/vas/api/v1/topup/data", &vas_payload)
+        .await
+    {
         Ok(res) => {
             let vas_status = res["status"].as_str().unwrap_or("").to_uppercase();
-            let tx_status = if vas_status == "SUCCESS" { "success" } else { "failed" };
+            let tx_status = if vas_status == "SUCCESS" {
+                "success"
+            } else {
+                "failed"
+            };
 
             // ── Save to vas_transactions ──────────────────────────────────────
-            let _ = sqlx
-                ::query!(
-                    r#"
+            let _ = sqlx::query!(
+                r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
                      reference, debit_account, status, response_code, response_message, meta)
@@ -2553,24 +2543,25 @@ pub async fn handle_data_purchase(
                     ($1, 'data', $2, $3, $4, 'NGN', $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (reference) DO NOTHING
                 "#,
-                    account_uuid,
-                    event.network,
-                    event.phone_number,
-                    amount_bd,
-                    event.reference,
-                    event.account_number,
-                    tx_status,
-                    res["responseCode"].as_str().unwrap_or(""),
-                    res["message"].as_str().unwrap_or(""),
-                    serde_json::json!({
+                account_uuid,
+                event.network,
+                event.phone_number,
+                amount_bd,
+                event.reference,
+                event.account_number,
+                tx_status,
+                res["responseCode"].as_str().unwrap_or(""),
+                res["message"].as_str().unwrap_or(""),
+                serde_json::json!({
                     "phone_number": event.phone_number,
                     "network":      event.network,
                     "product_id":   event.product_id,
                     "data_plan":    res["data"]["dataPlan"].as_str().unwrap_or(""),
                 })
-                )
-                .execute(db).await
-                .map_err(|e| println!("[worker/data_purchase] DB insert error: {}", e));
+            )
+            .execute(db)
+            .await
+            .map_err(|e| println!("[worker/data_purchase] DB insert error: {}", e));
 
             // ── Referral: advance VAS milestone ──────────────────────────────────────────
             if tx_status == "success" {
@@ -2580,12 +2571,15 @@ pub async fn handle_data_purchase(
                 });
             }
             // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten()
-                .flatten();
+            let token = sqlx::query_scalar!(
+                "SELECT device_token FROM accounts WHERE id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
             if let Some(token) = token {
                 let (title, body) = if vas_status == "SUCCESS" {
@@ -2594,7 +2588,9 @@ pub async fn handle_data_purchase(
                         format!(
                             "Dear valued customer, your data purchase of ₦{} ({}) for {} has been completed successfully.",
                             &event.amount,
-                            res["data"]["dataPlan"].as_str().unwrap_or(&event.product_id),
+                            res["data"]["dataPlan"]
+                                .as_str()
+                                .unwrap_or(&event.product_id),
                             event.phone_number
                         ),
                     )
@@ -2603,9 +2599,7 @@ pub async fn handle_data_purchase(
                         "Data Purchase Unsuccessful",
                         format!(
                             "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
-                            &event.amount,
-                            event.phone_number,
-                            event.reference
+                            &event.amount, event.phone_number, event.reference
                         ),
                     )
                 };
@@ -2614,8 +2608,7 @@ pub async fn handle_data_purchase(
                     &token,
                     title,
                     &body,
-                    Some(
-                        serde_json::json!({
+                    Some(serde_json::json!({
                         "route":     "NotificationDetail",
                         "service":   "data_purchase",
                         "status":    tx_status,
@@ -2623,16 +2616,15 @@ pub async fn handle_data_purchase(
                         "reference": event.reference,
                         "recipient": event.phone_number,
                         "network":   event.network,
-                    })
-                    )
-                ).await;
+                    })),
+                )
+                .await;
             }
         }
         Err(e) => {
             // ── Save failed attempt ───────────────────────────────────────────
-            let _ = sqlx
-                ::query!(
-                    r#"
+            let _ = sqlx::query!(
+                r#"
                 INSERT INTO vas_transactions
                     (account_id, vas_type, network, recipient, amount, currency,
                      reference, debit_account, status, response_message)
@@ -2640,24 +2632,28 @@ pub async fn handle_data_purchase(
                     ($1, 'data', $2, $3, $4, 'NGN', $5, $6, 'failed', $7)
                 ON CONFLICT (reference) DO NOTHING
                 "#,
-                    account_uuid,
-                    event.network,
-                    event.phone_number,
-                    amount_bd,
-                    event.reference,
-                    event.account_number,
-                    e.to_string()
-                )
-                .execute(db).await
-                .map_err(|e| println!("[worker/data_purchase] DB failed insert error: {}", e));
+                account_uuid,
+                event.network,
+                event.phone_number,
+                amount_bd,
+                event.reference,
+                event.account_number,
+                e.to_string()
+            )
+            .execute(db)
+            .await
+            .map_err(|e| println!("[worker/data_purchase] DB failed insert error: {}", e));
 
             // ── Push notification — failed ─────────────────────────────────────
-            let token = sqlx
-                ::query_scalar!("SELECT device_token FROM accounts WHERE id = $1", account_uuid)
-                .fetch_optional(db).await
-                .ok()
-                .flatten()
-                .flatten();
+            let token = sqlx::query_scalar!(
+                "SELECT device_token FROM accounts WHERE id = $1",
+                account_uuid
+            )
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
             if let Some(token) = token {
                 send_push_notification(

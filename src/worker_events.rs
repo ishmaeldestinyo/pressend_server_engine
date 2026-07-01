@@ -1,26 +1,30 @@
 use serde::{ Serialize, Deserialize };
 
+
 #[derive(Serialize, Deserialize)]
 pub struct SignupEvent {
     pub email: String,
     pub password: String,
     pub device_id: String,
     pub account_type: String,
-    pub address: String,
     pub otp_redis_key: String,
-    // from dojah NIN lookup
+    pub kyc_reference: String,
+
+    // from dojah NIN/BVN lookup — resolved later, not available at signup time
     pub nin: Option<String>,
     pub bvn: Option<String>,
-    pub firstname: String,
-    pub lastname: String,
-    pub middlename: String,
-    pub date_of_birth: String,
-    pub gender: String,
-    pub mobile_number: String,
-    pub city: String,
-    pub state: String,
-    pub lga: String,
-    pub user_photo: String,
+    pub firstname: Option<String>,
+    pub lastname: Option<String>,
+    pub middlename: Option<String>,
+    pub date_of_birth: Option<String>,
+    pub gender: Option<String>,
+    pub mobile_number: Option<String>,
+    pub address: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub lga: Option<String>,
+    pub user_photo: Option<String>,
+
     pub referrer_id: Option<String>,
 }
 
