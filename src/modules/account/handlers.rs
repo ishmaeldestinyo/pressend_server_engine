@@ -4,7 +4,6 @@ use crate::kafka::KafkaProducer;
 use crate::modules::account::schemas;
 use crate::modules::account::schemas::Country;
 use crate::modules::account::schemas::UpdateDeviceTokenRequest;
-use crate::utils::dojah::DojahClient;
 use crate::utils::jwt::{AuthUser, generate_access_token, generate_refresh_token, verify_token};
 use crate::utils::password_manager::hash_password;
 use crate::utils::password_manager::verify_password;
@@ -446,11 +445,16 @@ pub async fn verify_otp(
                 .query_async(&mut redis_conn)
                 .await;
         },
-        sqlx::query!("SELECT id FROM accounts WHERE email = $1", email).fetch_one(db.get_ref())
+        sqlx::query!(
+            r#"SELECT id, email, firstname, lastname, address, account_number, kyc_reference
+               FROM accounts WHERE email = $1"#,
+            email
+        )
+        .fetch_one(db.get_ref())
     );
 
-    let account_id = match account {
-        Ok(row) => row.id.to_string(),
+    let account = match account {
+        Ok(row) => row,
         Err(e) => {
             println!("[verify_otp] DB error: {}", e);
             return HttpResponse::InternalServerError().json(ApiResponse {
@@ -459,6 +463,261 @@ pub async fn verify_otp(
             });
         }
     };
+
+    let account_id = account.id.to_string();
+
+    // ── Open 9PSB wallet synchronously if not already opened ─────────────────
+    if account.account_number.is_none() {
+        if let Some(kyc_reference) = account.kyc_reference.clone() {
+            match sqlx::query!(
+                r#"
+                SELECT
+                    kv.id_type                       AS "id_type!",
+                    n.nin                            AS "nin?",
+                    n.first_name                     AS "nin_first_name?",
+                    n.middle_name                    AS "nin_middle_name?",
+                    n.last_name                      AS "nin_last_name?",
+                    n.gender                         AS "nin_gender?",
+                    n.date_of_birth                  AS "nin_dob?",
+                    n.phone_number                   AS "nin_phone?",
+                    b.bvn                            AS "bvn?",
+                    b.first_name                     AS "bvn_first_name?",
+                    b.middle_name                    AS "bvn_middle_name?",
+                    b.last_name                      AS "bvn_last_name?",
+                    b.gender                         AS "bvn_gender?",
+                    b.date_of_birth                  AS "bvn_dob?",
+                    b.phone_number                   AS "bvn_phone?"
+                FROM kyc_verifications kv
+                LEFT JOIN kyc_nin_data n ON n.kyc_verification_id = kv.id
+                LEFT JOIN kyc_bvn_data b ON b.kyc_verification_id = kv.id
+                WHERE kv.reference_id = $1
+                ORDER BY kv.created_at DESC
+                LIMIT 1
+                "#,
+                kyc_reference
+            )
+            .fetch_optional(db.get_ref())
+            .await
+            {
+                Ok(Some(identity)) => {
+                    let parsed = match identity.id_type.as_str() {
+                        "NIN" => identity.nin.clone().map(|nin| {
+                            (
+                                "NIN".to_string(),
+                                nin,
+                                identity.nin_first_name.clone().unwrap_or_default(),
+                                identity.nin_middle_name.clone().unwrap_or_default(),
+                                identity.nin_last_name.clone().unwrap_or_default(),
+                                identity.nin_gender.clone().unwrap_or_default(),
+                                identity
+                                    .nin_dob
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_default(),
+                                identity.nin_phone.clone().unwrap_or_default(),
+                            )
+                        }),
+                        "BVN" => identity.bvn.clone().map(|bvn| {
+                            (
+                                "BVN".to_string(),
+                                bvn,
+                                identity.bvn_first_name.clone().unwrap_or_default(),
+                                identity.bvn_middle_name.clone().unwrap_or_default(),
+                                identity.bvn_last_name.clone().unwrap_or_default(),
+                                identity.bvn_gender.clone().unwrap_or_default(),
+                                identity
+                                    .bvn_dob
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_default(),
+                                identity.bvn_phone.clone().unwrap_or_default(),
+                            )
+                        }),
+                        other => {
+                            println!(
+                                "[verify_otp] id_type '{}' not NIN or BVN for reference={}",
+                                other, kyc_reference
+                            );
+                            None
+                        }
+                    };
+
+                    if let Some((
+                        id_type,
+                        id_value,
+                        first_name,
+                        middle_name,
+                        last_name,
+                        gender,
+                        dob,
+                        phone,
+                    )) = parsed
+                    {
+                        if id_value.is_empty() {
+                            println!(
+                                "[verify_otp] id_value empty for reference={}",
+                                kyc_reference
+                            );
+                        } else {
+                            let gender_code = match gender.to_uppercase().as_str() {
+                                "MALE" => 0,
+                                "FEMALE" => 1,
+                                _ => 0,
+                            };
+
+                            let other_names = format!("{} {}", first_name, middle_name);
+
+                            let date_of_birth_fmt = {
+                                let parts: Vec<&str> = dob.split('-').collect();
+                                if parts.len() == 3 {
+                                    format!("{}/{}/{}", parts[2], parts[1], parts[0])
+                                } else {
+                                    dob.clone()
+                                }
+                            };
+
+                            let transaction_ref = uuid::Uuid::new_v4().to_string();
+                            let address = account.address.clone().unwrap_or_default();
+
+                            let mut open_wallet_body = serde_json::json!({
+                                "transactionTrackingRef": transaction_ref,
+                                "lastName":               last_name,
+                                "otherNames":             other_names,
+                                "phoneNo":                phone,
+                                "gender":                 gender_code,
+                                "dateOfBirth":            date_of_birth_fmt,
+                                "address":                address,
+                                "email":                  account.email,
+                            });
+
+                            if id_type == "NIN" {
+                                open_wallet_body["nationalIdentityNo"] =
+                                    serde_json::json!(id_value);
+                            } else {
+                                open_wallet_body["bvn"] = serde_json::json!(id_value);
+                            }
+
+                            println!(
+                                "[verify_otp] 9PSB request body: {}",
+                                serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
+                            );
+
+                            match PsbClient::new(cfg.get_ref())
+                                .post(
+                                    &mut redis_conn,
+                                    "/waas/api/v1/open_wallet",
+                                    &open_wallet_body,
+                                )
+                                .await
+                            {
+                                Ok(json) => {
+                                    let status_str =
+                                        json["status"].as_str().unwrap_or("").to_uppercase();
+
+                                    if status_str != "SUCCESS" {
+                                        println!(
+                                            "[verify_otp] 9PSB rejected — status: '{}', message: '{}'",
+                                            status_str,
+                                            json["message"].as_str().unwrap_or("no message")
+                                        );
+                                    } else {
+                                        let account_number = json["data"]["accountNumber"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let account_name = json["data"]["fullName"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string();
+
+                                        if account_number.is_empty() {
+                                            println!(
+                                                "[verify_otp] accountNumber empty in 9PSB response"
+                                            );
+                                        } else {
+                                            let nin_val = if id_type == "NIN" {
+                                                Some(id_value.clone())
+                                            } else {
+                                                None
+                                            };
+                                            let bvn_val = if id_type == "BVN" {
+                                                Some(id_value.clone())
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Err(e) = sqlx::query!(
+                                                r#"UPDATE accounts SET
+                                                    account_number   = $1,
+                                                    account_name     = $2,
+                                                    bank_name        = '9PSB',
+                                                    firstname        = COALESCE(firstname, $3),
+                                                    lastname         = COALESCE(lastname, $4),
+                                                    othername        = COALESCE(othername, $5),
+                                                    phone_number     = COALESCE(phone_number, $6),
+                                                    gender           = COALESCE(gender, $7),
+                                                    date_of_birth    = COALESCE(date_of_birth, $8),
+                                                    nin              = COALESCE(nin, $9),
+                                                    bvn              = COALESCE(bvn, $10),
+                                                    current_tier     = GREATEST(current_tier, 1),
+                                                    tier_upgraded_at = NOW(),
+                                                    updated_at       = NOW()
+                                                WHERE id = $11"#,
+                                                account_number,
+                                                account_name,
+                                                first_name,
+                                                last_name,
+                                                middle_name,
+                                                phone,
+                                                gender,
+                                                dob,
+                                                nin_val,
+                                                bvn_val,
+                                                account.id
+                                            )
+                                            .execute(db.get_ref())
+                                            .await
+                                            {
+                                                println!(
+                                                    "[verify_otp] failed to persist wallet info: {}",
+                                                    e
+                                                );
+                                            } else {
+                                                println!(
+                                                    "[verify_otp] 9PSB wallet opened — email: {}, account_number: {}",
+                                                    email, account_number
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("[verify_otp] 9PSB wallet open failed: {}", e);
+                                }
+                            }
+                        }
+                    } else {
+                        println!(
+                            "[verify_otp] identity data missing for id_type={} reference={}",
+                            identity.id_type, kyc_reference
+                        );
+                    }
+                }
+                Ok(None) => {
+                    println!(
+                        "[verify_otp] no kyc_verifications row for reference={}",
+                        kyc_reference
+                    );
+                }
+                Err(e) => {
+                    println!("[verify_otp] kyc_verifications fetch error: {}", e);
+                }
+            }
+        } else {
+            println!(
+                "[verify_otp] account {} has no kyc_reference — skipping wallet resolution",
+                email
+            );
+        }
+    }
 
     let secret = cfg.jwt_secret.clone();
     let (access_token, refresh_token) = tokio::join!(
@@ -1062,29 +1321,28 @@ pub async fn refresh_token(
     })
 }
 
-
 pub async fn get_user_info(
     auth: AuthUser,
     db: web::Data<sqlx::PgPool>,
-    redis: web::Data<redis::aio::ConnectionManager>
+    redis: web::Data<redis::aio::ConnectionManager>,
 ) -> impl Responder {
     let cache_key = format!("account:{}", auth.id);
     let mut redis_conn = redis.get_ref().clone();
 
-    let cached: Option<String> = match
-        redis::cmd("GET").arg(&cache_key).query_async(&mut redis_conn).await
+    let cached: Option<String> = match redis::cmd("GET")
+        .arg(&cache_key)
+        .query_async(&mut redis_conn)
+        .await
     {
         Ok(v) => v,
         Err(_) => None,
     };
 
     if let Some(data) = cached {
-        return HttpResponse::Ok().json(
-            serde_json::json!({
+        return HttpResponse::Ok().json(serde_json::json!({
             "status": "success",
             "data": serde_json::from_str::<serde_json::Value>(&data).unwrap_or_default()
-        })
-        );
+        }));
     }
 
     let account_uuid = match uuid::Uuid::parse_str(&auth.id) {
@@ -1098,9 +1356,8 @@ pub async fn get_user_info(
     };
 
     let (account, contact_history): (Result<_, sqlx::Error>, Result<_, sqlx::Error>) = tokio::join!(
-        sqlx
-            ::query!(
-                r#"SELECT id, email, firstname, lastname, othername, phone_number,
+        sqlx::query!(
+            r#"SELECT id, email, firstname, lastname, othername, phone_number,
                email_verified, phone_no_verified, status, account_type,
                is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,
                tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,
@@ -1108,18 +1365,17 @@ pub async fn get_user_info(
                account_number, account_name, bvn, nin,
                nin_userid, created_at, updated_at, referral_code
                FROM accounts WHERE id = $1"#,
-                account_uuid
-            )
-            .fetch_one(db.get_ref()),
-        sqlx
-            ::query!(
-                r#"SELECT id, field, old_value, new_value, registered_at, changed_at
+            account_uuid
+        )
+        .fetch_one(db.get_ref()),
+        sqlx::query!(
+            r#"SELECT id, field, old_value, new_value, registered_at, changed_at
                FROM account_contact_history
                WHERE account_id = $1
                ORDER BY registered_at DESC"#,
-                account_uuid
-            )
-            .fetch_all(db.get_ref())
+            account_uuid
+        )
+        .fetch_all(db.get_ref())
     );
 
     let row = match account {
@@ -1133,30 +1389,29 @@ pub async fn get_user_info(
     };
 
     let history = match contact_history {
-        Ok(rows) =>
-            rows
-                .iter()
-                .map(|h| {
-                    serde_json::json!({
-                        "id": h.id,
-                        "field": h.field,
-                        "old_value": h.old_value,
-                        "new_value": h.new_value,
-                        "registered_at": h.registered_at,
-                        "changed_at": h.changed_at,
-                    })
+        Ok(rows) => rows
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "id": h.id,
+                    "field": h.field,
+                    "old_value": h.old_value,
+                    "new_value": h.new_value,
+                    "registered_at": h.registered_at,
+                    "changed_at": h.changed_at,
                 })
-                .collect::<Vec<_>>(),
+            })
+            .collect::<Vec<_>>(),
         Err(_) => vec![],
     };
 
     let today = chrono::Utc::now().format("%Y-%m-%d");
     let daily_key = format!("daily_txn_total:{}:{}", account_uuid, today);
 
-    let daily_total: f64 = redis
-        ::cmd("GET")
+    let daily_total: f64 = redis::cmd("GET")
         .arg(&daily_key)
-        .query_async(&mut redis_conn).await
+        .query_async(&mut redis_conn)
+        .await
         .unwrap_or(None)
         .unwrap_or(0.0);
 
@@ -1168,8 +1423,7 @@ pub async fn get_user_info(
 
     let exceeded_limit = daily_limit.map(|limit| daily_total >= limit);
 
-    let data =
-        serde_json::json!({
+    let data = serde_json::json!({
         "id": row.id,
         "email": row.email,
         "firstname": row.firstname,
@@ -1205,19 +1459,17 @@ pub async fn get_user_info(
         "exceeded_limit":       exceeded_limit,
     });
 
-    let _: Result<(), redis::RedisError> = redis
-        ::cmd("SETEX")
+    let _: Result<(), redis::RedisError> = redis::cmd("SETEX")
         .arg(&cache_key)
         .arg(300u64)
         .arg(data.to_string())
-        .query_async(&mut redis_conn).await;
+        .query_async(&mut redis_conn)
+        .await;
 
-    HttpResponse::Ok().json(
-        serde_json::json!({
+    HttpResponse::Ok().json(serde_json::json!({
         "status": "success",
         "data": data
-    })
-    )
+    }))
 }
 
 pub async fn verify_palmpayment(

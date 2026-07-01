@@ -266,7 +266,7 @@ async fn main() {
                 } else if topic == topic_otp_send {
                     handle_resend_otp(&payload, &redis, &mailer).await;
                 } else if topic == topic_otp_verify {
-                     handle_verify_email(&payload, &db_pool, &app_cfg, &redis, &mailer).await;
+                    handle_verify_email(&payload, &db_pool, &mailer).await;
                 } else if topic == topic_password_change {
                     handle_change_password(&payload, &db_pool, &mailer).await;
                 } else if topic == topic_account_delete {
