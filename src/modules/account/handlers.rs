@@ -1220,9 +1220,6 @@ pub async fn get_user_info(
     )
 }
 
-
-
-
 pub async fn verify_palmpayment(
     auth: AuthUser,
     cfg: web::Data<crate::config::Config>,

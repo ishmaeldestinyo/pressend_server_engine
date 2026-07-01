@@ -464,7 +464,13 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     }
 }
 
-pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
+pub async fn handle_verify_email(
+    payload: &str,
+    db: &PgPool,
+    cfg: &Config,
+    redis: &redis::aio::ConnectionManager,
+    mailer: &Mailer,
+) {
     let event: VerifyEmailEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
@@ -473,6 +479,7 @@ pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         }
     };
 
+    // ── 1. Mark email verified ───────────────────────────────────────────────
     match sqlx::query!(
         "UPDATE accounts SET email_verified = true WHERE email = $1",
         event.email
@@ -482,15 +489,277 @@ pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
     {
         Ok(_) => {
             println!("[worker/verify_email] Email verified: {}", event.email);
-
-            // ── Fire welcome email ────────────────────────────────────────────
-            if let Err(e) = mailer.send_welcome(&event.email, "").await {
-                println!("[worker/verify_email] Welcome email error: {}", e);
-            }
         }
-        Err(e) => println!("[worker/verify_email] DB error: {}", e),
+        Err(e) => {
+            println!("[worker/verify_email] DB error: {}", e);
+            return;
+        }
+    }
+
+    // ── 2. Fetch account by email ────────────────────────────────────────────
+    let account = match sqlx::query!(
+        r#"SELECT id, email, firstname, lastname, address, account_number, kyc_reference
+           FROM accounts WHERE email = $1"#,
+        event.email
+    )
+    .fetch_optional(db)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            println!("[worker/verify_email] account not found for email: {}", event.email);
+            return;
+        }
+        Err(e) => {
+            println!("[worker/verify_email] account fetch error: {}", e);
+            return;
+        }
+    };
+
+    // ── 3. Open 9PSB wallet if not already opened ────────────────────────────
+    if account.account_number.is_none() {
+        if let Some(kyc_reference) = account.kyc_reference.clone() {
+            let identity = match sqlx::query!(
+                r#"
+                SELECT
+                    kv.id_type                       AS "id_type!",
+                    n.nin                            AS "nin?",
+                    n.first_name                     AS "nin_first_name?",
+                    n.middle_name                    AS "nin_middle_name?",
+                    n.last_name                      AS "nin_last_name?",
+                    n.gender                         AS "nin_gender?",
+                    n.date_of_birth                  AS "nin_dob?",
+                    n.phone_number                   AS "nin_phone?",
+                    b.bvn                            AS "bvn?",
+                    b.first_name                     AS "bvn_first_name?",
+                    b.middle_name                    AS "bvn_middle_name?",
+                    b.last_name                      AS "bvn_last_name?",
+                    b.gender                         AS "bvn_gender?",
+                    b.date_of_birth                  AS "bvn_dob?",
+                    b.phone_number                   AS "bvn_phone?"
+                FROM kyc_verifications kv
+                LEFT JOIN kyc_nin_data n ON n.kyc_verification_id = kv.id
+                LEFT JOIN kyc_bvn_data b ON b.kyc_verification_id = kv.id
+                WHERE kv.reference_id = $1
+                ORDER BY kv.created_at DESC
+                LIMIT 1
+                "#,
+                kyc_reference
+            )
+            .fetch_optional(db)
+            .await
+            {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    println!(
+                        "[worker/verify_email] no kyc_verifications row for reference={}",
+                        kyc_reference
+                    );
+                    return finish_verify_email(&event, mailer).await;
+                }
+                Err(e) => {
+                    println!("[worker/verify_email] kyc_verifications fetch error: {}", e);
+                    return finish_verify_email(&event, mailer).await;
+                }
+            };
+
+            let (id_type, id_value, first_name, middle_name, last_name, gender, dob, phone) =
+                match identity.id_type.as_str() {
+                    "NIN" => {
+                        let Some(nin) = identity.nin.clone() else {
+                            println!(
+                                "[worker/verify_email] id_type=NIN but kyc_nin_data missing for reference={}",
+                                kyc_reference
+                            );
+                            return finish_verify_email(&event, mailer).await;
+                        };
+                        (
+                            "NIN".to_string(),
+                            nin,
+                            identity.nin_first_name.unwrap_or_default(),
+                            identity.nin_middle_name.unwrap_or_default(),
+                            identity.nin_last_name.unwrap_or_default(),
+                            identity.nin_gender.unwrap_or_default(),
+                            identity
+                                .nin_dob
+                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default(),
+                            identity.nin_phone.unwrap_or_default(),
+                        )
+                    }
+                    "BVN" => {
+                        let Some(bvn) = identity.bvn.clone() else {
+                            println!(
+                                "[worker/verify_email] id_type=BVN but kyc_bvn_data missing for reference={}",
+                                kyc_reference
+                            );
+                            return finish_verify_email(&event, mailer).await;
+                        };
+                        (
+                            "BVN".to_string(),
+                            bvn,
+                            identity.bvn_first_name.unwrap_or_default(),
+                            identity.bvn_middle_name.unwrap_or_default(),
+                            identity.bvn_last_name.unwrap_or_default(),
+                            identity.bvn_gender.unwrap_or_default(),
+                            identity
+                                .bvn_dob
+                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default(),
+                            identity.bvn_phone.unwrap_or_default(),
+                        )
+                    }
+                    other => {
+                        println!(
+                            "[worker/verify_email] id_type '{}' not NIN or BVN for reference={}",
+                            other, kyc_reference
+                        );
+                        return finish_verify_email(&event, mailer).await;
+                    }
+                };
+
+            if id_value.is_empty() {
+                println!("[worker/verify_email] id_value empty for reference={}", kyc_reference);
+                return finish_verify_email(&event, mailer).await;
+            }
+
+            let gender_code = match gender.to_uppercase().as_str() {
+                "MALE" => 0,
+                "FEMALE" => 1,
+                _ => 0,
+            };
+
+            let other_names = format!("{} {}", first_name, middle_name);
+
+            let date_of_birth_fmt = {
+                let parts: Vec<&str> = dob.split('-').collect();
+                if parts.len() == 3 {
+                    format!("{}/{}/{}", parts[2], parts[1], parts[0])
+                } else {
+                    dob.clone()
+                }
+            };
+
+            let transaction_ref = Uuid::new_v4().to_string();
+            let address = account.address.clone().unwrap_or_default();
+
+            let mut open_wallet_body = serde_json::json!({
+                "transactionTrackingRef": transaction_ref,
+                "lastName":               last_name,
+                "otherNames":             other_names,
+                "phoneNo":                phone,
+                "gender":                 gender_code,
+                "dateOfBirth":            date_of_birth_fmt,
+                "address":                address,
+                "email":                  account.email,
+            });
+
+            if id_type == "NIN" {
+                open_wallet_body["nationalIdentityNo"] = serde_json::json!(id_value);
+            } else {
+                open_wallet_body["bvn"] = serde_json::json!(id_value);
+            }
+
+            println!(
+                "[worker/verify_email] 9PSB request body: {}",
+                serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
+            );
+
+            let mut redis_conn = redis.clone();
+            let json = match PsbClient::new(cfg)
+                .post(&mut redis_conn, "/waas/api/v1/open_wallet", &open_wallet_body)
+                .await
+            {
+                Ok(j) => j,
+                Err(e) => {
+                    println!("[worker/verify_email] 9PSB wallet open failed: {}", e);
+                    return finish_verify_email(&event, mailer).await;
+                }
+            };
+
+            let status_str = json["status"].as_str().unwrap_or("").to_uppercase();
+            if status_str != "SUCCESS" {
+                println!(
+                    "[worker/verify_email] 9PSB rejected — status: '{}', message: '{}'",
+                    status_str,
+                    json["message"].as_str().unwrap_or("no message")
+                );
+                return finish_verify_email(&event, mailer).await;
+            }
+
+            let account_number = json["data"]["accountNumber"].as_str().unwrap_or("").to_string();
+            let account_name = json["data"]["fullName"].as_str().unwrap_or("").to_string();
+
+            if account_number.is_empty() {
+                println!("[worker/verify_email] accountNumber empty in 9PSB response");
+                return finish_verify_email(&event, mailer).await;
+            }
+
+            let nin_val = if id_type == "NIN" { Some(id_value.clone()) } else { None };
+            let bvn_val = if id_type == "BVN" { Some(id_value.clone()) } else { None };
+
+            if let Err(e) = sqlx::query!(
+                r#"UPDATE accounts SET
+                    account_number   = $1,
+                    account_name     = $2,
+                    bank_name        = '9PSB',
+                    firstname        = COALESCE(firstname, $3),
+                    lastname         = COALESCE(lastname, $4),
+                    othername        = COALESCE(othername, $5),
+                    phone_number     = COALESCE(phone_number, $6),
+                    gender           = COALESCE(gender, $7),
+                    date_of_birth    = COALESCE(date_of_birth, $8),
+                    nin              = COALESCE(nin, $9),
+                    bvn              = COALESCE(bvn, $10),
+                    current_tier     = GREATEST(current_tier, 1),
+                    tier_upgraded_at = NOW(),
+                    updated_at       = NOW()
+                WHERE id = $11"#,
+                account_number,
+                account_name,
+                first_name,
+                last_name,
+                middle_name,
+                phone,
+                gender,
+                dob,
+                nin_val,
+                bvn_val,
+                account.id
+            )
+            .execute(db)
+            .await
+            {
+                println!("[worker/verify_email] failed to persist wallet info: {}", e);
+            } else {
+                println!(
+                    "[worker/verify_email] 9PSB wallet opened — email: {}, account_number: {}",
+                    event.email, account_number
+                );
+            }
+        } else {
+            println!(
+                "[worker/verify_email] account {} has no kyc_reference — skipping wallet resolution",
+                event.email
+            );
+        }
+    } else {
+        println!(
+            "[worker/verify_email] account {} already has account_number — skipping wallet resolution",
+            event.email
+        );
+    }
+
+    finish_verify_email(&event, mailer).await;
+}
+
+/// Sends the welcome email — extracted so every early-return path above still fires it.
+async fn finish_verify_email(event: &VerifyEmailEvent, mailer: &Mailer) {
+    if let Err(e) = mailer.send_welcome(&event.email, "").await {
+        println!("[worker/verify_email] Welcome email error: {}", e);
     }
 }
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
