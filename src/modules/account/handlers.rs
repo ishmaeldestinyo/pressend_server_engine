@@ -30,6 +30,11 @@ use validator::Validate;
 pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> impl Responder {
     let body = body.into_inner();
 
+    println!(
+        "[dojah_webhook] received payload: {}",
+        serde_json::to_string_pretty(&body).unwrap_or_default()
+    );
+
     let verification_status = body["verification_status"].as_str().unwrap_or("");
     // if verification_status != "Completed" {
     //     return HttpResponse::Ok().json(
@@ -384,6 +389,8 @@ pub async fn send_otp(
         status: ResponseStatus::SUCCESS,
     })
 }
+
+
 
 pub async fn verify_otp(
     body: web::Json<schemas::VerifyOTPRequest>,
