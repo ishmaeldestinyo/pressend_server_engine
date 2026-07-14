@@ -1,0 +1,148 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.sender_id, t.reciever_id, t.reciever_account_number,\n               t.reciever_account_name, t.reciever_bank, t.reference, t.type,\n               t.amount, t.currency, t.narration, t.status, t.channel,\n               t.balance_before, t.balance_after, t.created_at, t.updated_at,\n               r.id as \"resolution_id?\", r.reason as \"resolution_reason?\",\n               r.resolution_note as \"resolution_note?\", r.status as \"resolution_status?\",\n               r.resolved_by as \"resolved_by?\"\n           FROM transactions t\n           LEFT JOIN resolutions r ON r.transaction_id = t.id\n           WHERE t.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sender_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "reciever_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "reciever_account_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "reciever_account_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "reciever_bank",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "amount",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 9,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "narration",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "channel",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "balance_before",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 14,
+        "name": "balance_after",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "resolution_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 18,
+        "name": "resolution_reason?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "resolution_note?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "resolution_status?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "resolved_by?",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "586c0c008490ce339d4f5082237836eb0064dfd1c796d5d62409a064dcca7598"
+}

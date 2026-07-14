@@ -28,7 +28,7 @@ pub fn hash_password(password: &str) -> Result<String, String> {
     // tune: reduce memory & iterations for speed vs security tradeoff
     let params = Params::new(
         16 * 1024, // 16MB memory (default is 64MB)
-        2,         // 2 iterations (default is 3)
+        3,         // 2 iterations (default is 3)
         1,         // 1 thread
         None,
     ).unwrap();

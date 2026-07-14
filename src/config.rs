@@ -43,6 +43,7 @@ pub struct Config {
     pub dojah_pk: String,
     pub dojah_sk: String,
     pub dojah_app_id: String,
+    pub admin_jwt_secret: String,
     pub dojah_webhook_url: String,
 
 }
@@ -62,6 +63,8 @@ impl Config {
            
             psb_webhook_username: env::var("_9PSB_WEBHOOK_USERNAME").expect("_9PSB_WEBHOOK_USERNAME must be set"),
             psb_webhook_password: env::var("_9PSB_WEBHOOK_PASSWORD").expect("_9PSB_WEBHOOK_PASSWORD must be set"),
+
+            admin_jwt_secret: env::var("ADMIN_JWT_SECRET").expect("ADMIN_JWT_SECRET must be set"),
 
 
             // dojah credentials

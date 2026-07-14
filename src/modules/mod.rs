@@ -4,3 +4,4 @@ pub mod webhook;
 pub mod vas;
 pub mod legacy_plan;
 pub mod beneficiary;
+pub mod admin;

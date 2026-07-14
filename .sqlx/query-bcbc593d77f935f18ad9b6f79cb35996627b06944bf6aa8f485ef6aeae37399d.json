@@ -1,0 +1,190 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, email, firstname, lastname, othername, phone_number,\n               email_verified, phone_no_verified, status, account_type,\n               is_2fa_enabled, user_photo, device_id, current_tier, pending_tier_upgrade,\n               tier_upgraded_at, tier_upgrade_requested_at, panic_enabled,\n               panic_message, panic_activated_at, panic_deactivated_at,\n               account_number, account_name, bvn, nin,\n               nin_userid, created_at, updated_at, referral_code\n               FROM accounts WHERE id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "firstname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "lastname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "othername",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "phone_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "email_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "phone_no_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "status",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "account_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_2fa_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "user_photo",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "device_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 13,
+        "name": "current_tier",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 14,
+        "name": "pending_tier_upgrade",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 15,
+        "name": "tier_upgraded_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "tier_upgrade_requested_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "panic_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "panic_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 19,
+        "name": "panic_activated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 20,
+        "name": "panic_deactivated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 21,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 22,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 23,
+        "name": "bvn",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 24,
+        "name": "nin",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 25,
+        "name": "nin_userid",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 26,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 27,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 28,
+        "name": "referral_code",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "bcbc593d77f935f18ad9b6f79cb35996627b06944bf6aa8f485ef6aeae37399d"
+}

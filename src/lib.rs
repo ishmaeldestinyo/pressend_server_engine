@@ -10,3 +10,4 @@ pub mod worker_events;
 pub mod worker_handlers;
 pub mod cron;
 pub mod ws;
+pub mod scripts;

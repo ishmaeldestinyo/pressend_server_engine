@@ -64,6 +64,8 @@ env = "1.0.1"
 yup-oauth2 = "12.1.2"
 rust_decimal = "1"
 base64 = "0.21"
+rpassword = "7.5.4"
+futures-util = "0.3.32"
 
 # For testing
 [dev-dependencies]

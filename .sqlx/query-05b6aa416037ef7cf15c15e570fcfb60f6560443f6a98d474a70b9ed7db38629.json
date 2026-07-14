@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            id, email, firstname, lastname, othername, phone_number,\n            account_number, account_name, account_type, status, current_tier,\n            email_verified, phone_no_verified, created_at, updated_at\n        FROM accounts\n        WHERE deleted_at IS NULL\n          AND ($1::text IS NULL OR status = $1)\n          AND ($2::text IS NULL OR account_type = $2)\n          AND ($3::smallint IS NULL OR current_tier = $3)\n          AND (\n              $4::text IS NULL\n              OR LOWER(email) LIKE $4\n              OR LOWER(firstname) LIKE $4\n              OR LOWER(lastname) LIKE $4\n              OR TRIM(account_number::text) = $5\n              OR TRIM(phone_number) = $5\n          )\n        ORDER BY created_at DESC\n        LIMIT $6 OFFSET $7\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "firstname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "lastname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "othername",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "phone_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "account_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "account_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "account_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "status",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "current_tier",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 11,
+        "name": "email_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "phone_no_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int2",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "05b6aa416037ef7cf15c15e570fcfb60f6560443f6a98d474a70b9ed7db38629"
+}

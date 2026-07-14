@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT vt.account_id, a.email, a.firstname, a.lastname,\n               COUNT(*) as \"count!\", COALESCE(SUM(vt.amount), 0) as \"total\"\n           FROM vas_transactions vt\n           JOIN accounts a ON a.id = vt.account_id\n           WHERE vt.status = 'success'\n           GROUP BY vt.account_id, a.email, a.firstname, a.lastname\n           ORDER BY total DESC\n           LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "account_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "firstname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "lastname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "total",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "6a51f5cf5448eb5c57a495dce0c6010b619233851561b5d1c03362be3dc0d8d3"
+}

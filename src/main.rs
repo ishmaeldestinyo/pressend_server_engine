@@ -131,6 +131,11 @@ async fn main() -> std::io::Result<()> {
                         let m = mutating_gov.clone();
                         move |sc| modules::transactions::routes::config(sc, m)
                     })
+                   .configure({
+                        let s = strict_gov.clone();
+                        let m = mutating_gov.clone();
+                        move |sc| modules::admin::routes::config(sc, s, m)
+                    })
                     .configure({
                         let m = mutating_gov.clone();
                         move |sc| modules::beneficiary::routes::config(sc, m)

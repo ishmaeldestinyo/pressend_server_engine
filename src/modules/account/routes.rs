@@ -14,7 +14,6 @@ pub fn config(
     cfg.service(
         web::scope("/account")
             // --- STRICT ROUTES ---
-            .route("/dojah/webhook", web::post().to(handlers::dojah_webhook).wrap(Governor::new(&strict_gov)))
             .route("/", web::post().to(handlers::signup).wrap(Governor::new(&strict_gov)))
             .route("/signin", web::post().to(handlers::signin).wrap(Governor::new(&strict_gov)))
             .route("/signin/new-device/verify", web::post().to(handlers::signin_new_device_verify).wrap(Governor::new(&strict_gov)))
@@ -44,6 +43,9 @@ pub fn config(
             .route("/supported-countries", web::get().to(handlers::fetch_supported_countries))
             .route("/palm", web::get().to(handlers::get_palm))
             .route("/palm/status", web::get().to(handlers::get_panic_status))
-            .route("/wallet-enquiry", web::get().to(handlers::wallet_enquiry)),
+            .route("/wallet-enquiry", web::get().to(handlers::wallet_enquiry))
+
+            // No strict api limitation
+            .route("/dojah/webhook", web::post().to(handlers::dojah_webhook))
     );
 }

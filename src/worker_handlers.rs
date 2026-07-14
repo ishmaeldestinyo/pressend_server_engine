@@ -1475,8 +1475,8 @@ pub async fn handle_internal_transfer(
         "totalAmount":   event.amount.parse::<f64>().unwrap_or(0.0),
         "transactionId": event.reference,
         "merchant": {
-            "isFee":              false,
-            "d": "",
+            "isFee":  false,
+            "merchantAccount": "",
             "merchantFeeAmount":  ""
         }
     });
