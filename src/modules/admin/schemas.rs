@@ -21,14 +21,11 @@ pub struct AccountWalletQuery {
 
 
 #[derive(Debug, Deserialize, Validate)]
-pub struct SuspendAccountBody {
-    #[validate(length(min = 1))]
-    pub email: String,
-    #[validate(length(min = 1))]
-    pub phone_number: String,
+pub struct ReviewAccountBody {
+    pub status: String,
+    pub note: Option<String>,
     pub reason: Option<String>,
 }
-
 
 
 #[derive(Debug, Deserialize, Validate)]

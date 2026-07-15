@@ -23,7 +23,7 @@ pub fn config(
 
         // --- MUTATING ROUTES ---
         // These still go through mutating_gov since they change state.
-        .route("/users/{id}/suspend", web::patch().to(handlers::suspend_account).wrap(Governor::new(&mutating_gov)))
+        .route("/users/{id}/review", web::patch().to(handlers::review_account).wrap(Governor::new(&mutating_gov)))
         .route("/staff", web::post().to(create_staff).wrap(Governor::new(&mutating_gov)))
         .route("/staff/{id}/reset-password", web::patch().to(reset_staff_password).wrap(Governor::new(&mutating_gov)))
 

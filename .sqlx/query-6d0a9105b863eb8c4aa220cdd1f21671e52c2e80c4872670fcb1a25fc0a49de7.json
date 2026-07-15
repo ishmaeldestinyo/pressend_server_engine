@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts\n           SET status = $1,\n               admin_note = COALESCE($2, admin_note),\n               admin_note_updated_at = CASE WHEN $2 IS NOT NULL THEN NOW() ELSE admin_note_updated_at END,\n               updated_at = NOW()\n           WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6d0a9105b863eb8c4aa220cdd1f21671e52c2e80c4872670fcb1a25fc0a49de7"
+}

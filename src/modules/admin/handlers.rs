@@ -1,25 +1,36 @@
-use actix_web::{web, HttpResponse, Responder};
 use crate::config::Config;
-use crate::middlewares::admin_auth::{AdminAuth, require_role};
-use crate::modules::admin::schemas::{ListAccountsQuery, SuspendAccountBody};
-use crate::utils::psb::PsbClient;
-use validator::Validate;
-use crate::utils::responder::{ApiResponse, ResponseStatus};
 use crate::middlewares::admin_auth::issue_admin_token;
+use crate::middlewares::admin_auth::{AdminAuth, require_role};
 use crate::modules::admin::schemas::LoginRequest;
+use crate::modules::admin::schemas::{ListAccountsQuery, ReviewAccountBody};
 use crate::utils::password_manager::verify_password;
+use crate::utils::psb::PsbClient;
+use crate::utils::responder::{ApiResponse, ResponseStatus};
+use actix_web::{HttpResponse, Responder, web};
 use sqlx::PgPool;
-
+use validator::Validate;
 
 const SUSPEND_ROLES: &[&str] = &["admin", "compliance"];
 
 const READ_ROLES: &[&str] = &["admin", "support", "compliance"];
 
 const ADMIN_ROLES: &[(&str, &str)] = &[
-    ("super_admin", "Full access to all admin operations, including managing other admins"),
-    ("admin", "General admin access — accounts, wallets, support actions"),
-    ("compliance", "KYC review, account suspension, and compliance-related actions"),
-    ("support", "Read-only access to account details for customer support"),
+    (
+        "super_admin",
+        "Full access to all admin operations, including managing other admins",
+    ),
+    (
+        "admin",
+        "General admin access — accounts, wallets, support actions",
+    ),
+    (
+        "compliance",
+        "KYC review, account suspension, and compliance-related actions",
+    ),
+    (
+        "support",
+        "Read-only access to account details for customer support",
+    ),
 ];
 
 /// GET/POST /admin/users — paginated, filterable summary list
@@ -84,23 +95,25 @@ pub async fn get_accounts(
         Ok(rows) => {
             let data: Vec<_> = rows
                 .iter()
-                .map(|r| serde_json::json!({
-                    "id": r.id,
-                    "email": r.email,
-                    "firstname": r.firstname,
-                    "lastname": r.lastname,
-                    "othername": r.othername,
-                    "phone_number": r.phone_number,
-                    "account_number": r.account_number,
-                    "account_name": r.account_name,
-                    "account_type": r.account_type,
-                    "status": r.status,
-                    "current_tier": r.current_tier,
-                    "email_verified": r.email_verified,
-                    "phone_no_verified": r.phone_no_verified,
-                    "created_at": r.created_at,
-                    "updated_at": r.updated_at,
-                }))
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "email": r.email,
+                        "firstname": r.firstname,
+                        "lastname": r.lastname,
+                        "othername": r.othername,
+                        "phone_number": r.phone_number,
+                        "account_number": r.account_number,
+                        "account_name": r.account_name,
+                        "account_type": r.account_type,
+                        "status": r.status,
+                        "current_tier": r.current_tier,
+                        "email_verified": r.email_verified,
+                        "phone_no_verified": r.phone_no_verified,
+                        "created_at": r.created_at,
+                        "updated_at": r.updated_at,
+                    })
+                })
                 .collect();
 
             HttpResponse::Ok().json(serde_json::json!({
@@ -170,16 +183,20 @@ pub async fn get_account_details(
         }
     };
 
-    let history = contact_history.unwrap_or_default().iter().map(|h| {
-        serde_json::json!({
-            "id": h.id,
-            "field": h.field,
-            "old_value": h.old_value,
-            "new_value": h.new_value,
-            "registered_at": h.registered_at,
-            "changed_at": h.changed_at,
+    let history = contact_history
+        .unwrap_or_default()
+        .iter()
+        .map(|h| {
+            serde_json::json!({
+                "id": h.id,
+                "field": h.field,
+                "old_value": h.old_value,
+                "new_value": h.new_value,
+                "registered_at": h.registered_at,
+                "changed_at": h.changed_at,
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
     HttpResponse::Ok().json(serde_json::json!({
         "status": "success",
@@ -314,7 +331,11 @@ pub async fn get_account_wallet(
             }))
         }
         Err(e) => {
-            log::warn!("[get_account_wallet] PSB wallet_enquiry failed for {}: {}", account_number, e);
+            log::warn!(
+                "[get_account_wallet] PSB wallet_enquiry failed for {}: {}",
+                account_number,
+                e
+            );
             HttpResponse::BadGateway().json(ApiResponse {
                 message: "Wallet lookup failed".into(),
                 status: ResponseStatus::ERROR,
@@ -323,16 +344,24 @@ pub async fn get_account_wallet(
     }
 }
 
+const REVIEW_ROLES: &[&str] = SUSPEND_ROLES; // same roles as before, renamed for clarity if you'd rather not share the const
 
-pub async fn suspend_account(
+pub async fn review_account(
     admin: AdminAuth,
     path: web::Path<String>,
-    body: web::Json<SuspendAccountBody>,
+    body: web::Json<ReviewAccountBody>,
     db: web::Data<sqlx::PgPool>,
     redis: web::Data<redis::aio::ConnectionManager>,
 ) -> impl Responder {
     if let Err(resp) = require_role(&admin, SUSPEND_ROLES) {
         return resp;
+    }
+
+    if !matches!(body.status.as_str(), "active" | "suspended" | "disabled") {
+        return HttpResponse::UnprocessableEntity().json(ApiResponse {
+            message: "status must be 'active', 'suspended', or 'disabled'".into(),
+            status: ResponseStatus::ERROR,
+        });
     }
 
     if let Err(errors) = body.validate() {
@@ -353,15 +382,8 @@ pub async fn suspend_account(
         }
     };
 
-    let email = body.email.trim().to_lowercase();
-    let phone = body.phone_number.trim().to_string();
-
-    // Always read the live row — never suspend based on cached or
-    // client-supplied data alone.
     let row = sqlx::query!(
-        r#"SELECT id, email, phone_number, status
-           FROM accounts
-           WHERE id = $1 AND deleted_at IS NULL"#,
+        r#"SELECT id, status FROM accounts WHERE id = $1 AND deleted_at IS NULL"#,
         account_uuid
     )
     .fetch_optional(db.get_ref())
@@ -376,80 +398,62 @@ pub async fn suspend_account(
             });
         }
         Err(e) => {
-            log::error!("[suspend_account] DB error fetching account: {}", e);
+            log::error!("[review_account] DB error fetching account: {}", e);
             return HttpResponse::InternalServerError().finish();
         }
     };
 
-    // Same principle as the login check: id + email + phone must all agree
-    // on the same account, so a mistyped/copy-pasted account_id can't
-    // silently suspend a different person.
-    let email_matches = row.email.to_lowercase() == email;
-    let phone_matches = row
-        .phone_number
-        .as_deref()
-        .map(|p| p == phone)
-        .unwrap_or(false);
-
-    if !email_matches || !phone_matches {
-        return HttpResponse::UnprocessableEntity().json(ApiResponse {
-            message: "Account id, email, and phone number do not all match the same account".into(),
+    if row.status == "deleted" {
+        return HttpResponse::Conflict().json(ApiResponse {
+            message: "Cannot review a deleted account".into(),
             status: ResponseStatus::ERROR,
         });
     }
 
-    match row.status.as_str() {
-        "suspended" => {
-            return HttpResponse::Ok().json(ApiResponse {
-                message: "Account is already suspended".into(),
-                status: ResponseStatus::SUCCESS,
-            });
-        }
-        "deleted" => {
-            return HttpResponse::Conflict().json(ApiResponse {
-                message: "Cannot suspend a deleted account".into(),
-                status: ResponseStatus::ERROR,
-            });
-        }
-        _ => {}
-    }
+    let status_changed = row.status != body.status;
 
     let updated = sqlx::query!(
-        r#"UPDATE accounts SET status = 'suspended', updated_at = NOW()
-           WHERE id = $1"#,
+        r#"UPDATE accounts
+           SET status = $1,
+               admin_note = COALESCE($2, admin_note),
+               admin_note_updated_at = CASE WHEN $2 IS NOT NULL THEN NOW() ELSE admin_note_updated_at END,
+               updated_at = NOW()
+           WHERE id = $3"#,
+        body.status,
+        body.note.as_deref(),
         account_uuid
     )
     .execute(db.get_ref())
     .await;
 
     if let Err(e) = updated {
-        log::error!("[suspend_account] failed to update status: {}", e);
+        log::error!("[review_account] failed to update account: {}", e);
         return HttpResponse::InternalServerError().finish();
     }
 
-    // Critical: purge the get_user_info cache immediately. Without this,
-    // the account:{id} entry (300s TTL) keeps serving "active" until it
-    // naturally expires, regardless of what Postgres now says.
-    let mut redis_conn = redis.get_ref().clone();
-    let cache_key = format!("account:{}", account_uuid);
-    let _: Result<(), redis::RedisError> = redis::cmd("DEL")
-        .arg(&cache_key)
-        .query_async(&mut redis_conn)
-        .await;
+    if status_changed {
+        let mut redis_conn = redis.get_ref().clone();
+        let cache_key = format!("account:{}", account_uuid);
+        let _: Result<(), redis::RedisError> = redis::cmd("DEL")
+            .arg(&cache_key)
+            .query_async(&mut redis_conn)
+            .await;
+    }
 
     log::info!(
-        "[suspend_account] admin {} suspended account {} (reason: {:?})",
+        "[review_account] admin {} set account {} to '{}' (reason: {:?}, note: {})",
         admin.id,
         account_uuid,
-        body.reason
+        body.status,
+        body.reason,
+        body.note.is_some()
     );
 
     HttpResponse::Ok().json(ApiResponse {
-        message: "Account suspended successfully".into(),
+        message: "Account reviewed successfully".into(),
         status: ResponseStatus::SUCCESS,
     })
 }
-
 
 
 /// POST /admin/login
@@ -515,7 +519,11 @@ pub async fn login(
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
-    let ip = req.connection_info().realip_remote_addr().unwrap_or("unknown").to_string();
+    let ip = req
+        .connection_info()
+        .realip_remote_addr()
+        .unwrap_or("unknown")
+        .to_string();
 
     if let Err(e) = sqlx::query!(
         r#"UPDATE admins SET last_login_at = NOW(), last_login_ip = $1 WHERE id = $2"#,
@@ -535,9 +543,6 @@ pub async fn login(
     }))
 }
 
-
-
-
 /// GET /admin/roles — list valid admin roles
 pub async fn get_roles(admin: AdminAuth) -> impl Responder {
     if let Err(resp) = require_role(&admin, &[]) {
@@ -548,10 +553,12 @@ pub async fn get_roles(admin: AdminAuth) -> impl Responder {
 
     let roles: Vec<_> = ADMIN_ROLES
         .iter()
-        .map(|(role, description)| serde_json::json!({
-            "role": role,
-            "description": description,
-        }))
+        .map(|(role, description)| {
+            serde_json::json!({
+                "role": role,
+                "description": description,
+            })
+        })
         .collect();
 
     HttpResponse::Ok().json(serde_json::json!({
