@@ -12,7 +12,7 @@ const READ_ROLES: &[&str] = &["admin", "support", "compliance"];
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
 pub struct TransactionRow {
     pub id: uuid::Uuid,
-    pub sender_id: uuid::Uuid,
+    pub sender_id: Option<uuid::Uuid>,   
     pub reciever_id: Option<uuid::Uuid>,
     pub reciever_account_number: Option<String>,
     pub reciever_account_name: Option<String>,
@@ -32,6 +32,7 @@ pub struct TransactionRow {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
+
 
 const TX_COLUMNS: &str = "id, sender_id, reciever_id, reciever_account_number, \
     reciever_account_name, reciever_bank, reference, type, amount, currency, \
