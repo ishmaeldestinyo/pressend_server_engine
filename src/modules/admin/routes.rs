@@ -17,29 +17,36 @@ pub fn config(
         web::scope("/admin")
 
         // --- AUTH ---
+        // Keep this one strict — it's the endpoint an attacker actually wants
+        // to brute-force, so it stays behind the tightest limiter.
         .route("/login", web::post().to(handlers::login).wrap(Governor::new(&strict_gov)))
 
         // --- MUTATING ROUTES ---
+        // These still go through mutating_gov since they change state.
         .route("/users/{id}/suspend", web::patch().to(handlers::suspend_account).wrap(Governor::new(&mutating_gov)))
         .route("/staff", web::post().to(create_staff).wrap(Governor::new(&mutating_gov)))
         .route("/staff/{id}/reset-password", web::patch().to(reset_staff_password).wrap(Governor::new(&mutating_gov)))
 
         // --- READ ROUTES ---
-        .route("/users", web::get().to(handlers::get_accounts).wrap(Governor::new(&strict_gov)))
-        .route("/users/{id}", web::get().to(handlers::get_account_details).wrap(Governor::new(&strict_gov)))
-        .route("/users/{id}/wallet", web::get().to(handlers::get_account_wallet).wrap(Governor::new(&strict_gov)))
+        // No rate limiting here — a dashboard legitimately fires several of
+        // these in parallel on every page load, and they're already behind
+        // auth (the governor was never the thing protecting these from
+        // unauthorized access, the JWT/session check is).
+        .route("/users", web::get().to(handlers::get_accounts))
+        .route("/users/{id}", web::get().to(handlers::get_account_details))
+        .route("/users/{id}/wallet", web::get().to(handlers::get_account_wallet))
 
-        .route("/roles", web::get().to(handlers::get_roles).wrap(Governor::new(&strict_gov)))
-        .route("/staff", web::get().to(list_staff).wrap(Governor::new(&strict_gov)))
+        .route("/roles", web::get().to(handlers::get_roles))
+        .route("/staff", web::get().to(list_staff))
 
-        .route("/transactions", web::get().to(list_transactions).wrap(Governor::new(&strict_gov)))
-        .route("/transactions/top", web::get().to(top_transactions).wrap(Governor::new(&strict_gov)))
-        .route("/transactions/search", web::get().to(search_transactions_between_accounts).wrap(Governor::new(&strict_gov)))
-        .route("/transactions/stats/channel", web::get().to(channel_stats).wrap(Governor::new(&strict_gov)))
-        .route("/transactions/stats/volume", web::get().to(volume_stats).wrap(Governor::new(&strict_gov)))
-        .route("/transactions/{id}", web::get().to(get_transaction_details).wrap(Governor::new(&strict_gov)))
+        .route("/transactions", web::get().to(list_transactions))
+        .route("/transactions/top", web::get().to(top_transactions))
+        .route("/transactions/search", web::get().to(search_transactions_between_accounts))
+        .route("/transactions/stats/channel", web::get().to(channel_stats))
+        .route("/transactions/stats/volume", web::get().to(volume_stats))
+        .route("/transactions/{id}", web::get().to(get_transaction_details))
 
-        .route("/vas-transactions", web::get().to(list_vas_transactions).wrap(Governor::new(&strict_gov)))
-        .route("/vas-transactions/stats", web::get().to(vas_stats).wrap(Governor::new(&strict_gov)))
+        .route("/vas-transactions", web::get().to(list_vas_transactions))
+        .route("/vas-transactions/stats", web::get().to(vas_stats))
     );
 }

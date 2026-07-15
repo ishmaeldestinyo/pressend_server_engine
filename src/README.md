@@ -11,8 +11,6 @@ in the vault
 3. airtime to cash
 
 
-e
-
 
 4. virtual dollar card
 allow exchange of ghana to naira and vice versa
