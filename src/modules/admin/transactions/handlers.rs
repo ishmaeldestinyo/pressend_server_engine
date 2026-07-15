@@ -7,7 +7,6 @@ use crate::middlewares::admin_auth::{AdminAuth, require_role};
 use crate::modules::admin::transactions::schemas::*;
 use crate::utils::responder::{ApiResponse, ResponseStatus};
 
-
 const READ_ROLES: &[&str] = &["admin", "support", "compliance"];
 
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
@@ -28,13 +27,16 @@ pub struct TransactionRow {
     pub channel: Option<String>,
     pub balance_before: Option<BigDecimal>,
     pub balance_after: Option<BigDecimal>,
+    pub meta: Option<serde_json::Value>,
+    pub resolution_id: Option<uuid::Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 const TX_COLUMNS: &str = "id, sender_id, reciever_id, reciever_account_number, \
     reciever_account_name, reciever_bank, reference, type, amount, currency, \
-    narration, status, channel, balance_before, balance_after, created_at, updated_at";
+    narration, status, channel, balance_before, balance_after, meta, resolution_id, \
+    created_at, updated_at";
 
 /// GET /admin/transactions
 pub async fn list_transactions(
@@ -55,7 +57,6 @@ pub async fn list_transactions(
     let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) * limit;
 
-    // Allowlisted sort — never interpolate query.sort_by/order directly.
     let sort_col = match query.sort_by.as_deref() {
         Some("amount") => "amount",
         Some("created_at") | None => "created_at",
@@ -123,8 +124,9 @@ pub async fn get_transaction_details(
         r#"SELECT t.id, t.sender_id, t.reciever_id, t.reciever_account_number,
                t.reciever_account_name, t.reciever_bank, t.reference, t.type,
                t.amount, t.currency, t.narration, t.status, t.channel,
-               t.balance_before, t.balance_after, t.created_at, t.updated_at,
-               r.id as "resolution_id?", r.reason as "resolution_reason?",
+               t.balance_before, t.balance_after, t.meta, t.resolution_id,
+               t.created_at, t.updated_at,
+               r.id as "resolution_row_id?", r.reason as "resolution_reason?",
                r.resolution_note as "resolution_note?", r.status as "resolution_status?",
                r.resolved_by as "resolved_by?"
            FROM transactions t
@@ -146,9 +148,10 @@ pub async fn get_transaction_details(
                 "type": r.r#type, "amount": r.amount, "currency": r.currency,
                 "narration": r.narration, "status": r.status, "channel": r.channel,
                 "balance_before": r.balance_before, "balance_after": r.balance_after,
+                "meta": r.meta, "resolution_id": r.resolution_id,
                 "created_at": r.created_at, "updated_at": r.updated_at,
-                "resolution": r.resolution_id.map(|_| serde_json::json!({
-                    "id": r.resolution_id,
+                "resolution": r.resolution_row_id.map(|_| serde_json::json!({
+                    "id": r.resolution_row_id,
                     "reason": r.resolution_reason,
                     "note": r.resolution_note,
                     "status": r.resolution_status,
@@ -231,8 +234,6 @@ pub async fn volume_stats(admin: AdminAuth, db: web::Data<PgPool>) -> impl Respo
         return resp;
     }
 
-    // Fixed, allowlisted intervals — safe to interpolate since none of this
-    // comes from user input.
     let periods = [("today", "1 day"), ("last_week", "7 days"), ("2weeks", "14 days"), ("month", "30 days")];
 
     let mut results = Vec::with_capacity(periods.len());
@@ -332,8 +333,6 @@ pub async fn search_transactions_between_accounts(
     if let Some(max_amount) = &query.max_amount {
         qb.push(" AND amount <= ").push_bind(max_amount);
     }
-    // Default to success if not specified — matches "where status is
-    // success or so" reading of the request.
     qb.push(" AND status = ").push_bind(query.status.clone().unwrap_or_else(|| "success".into()));
 
     qb.push(" ORDER BY created_at DESC");
