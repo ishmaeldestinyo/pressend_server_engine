@@ -140,8 +140,6 @@ pub struct ResetPasswordSubmit {
     #[validate(custom(function = "validate_password"))]
     pub new_password: String,
 }
-
-
 #[derive(Deserialize, Serialize, Validate)]
 pub struct UpgradeTier2Request {
     #[validate(length(min = 4, message = "Reference is required and must be at least 4 characters"))]
@@ -168,13 +166,13 @@ pub struct UpgradeTier2Request {
     #[validate(length(min = 2, max = 3, message = "PEP must be YES or NO"))]
     pub pep: String,
 
-    #[validate(length(max = 5000000, message = "ID card front must not exceed 5000000 characters"))]
+    #[validate(length(max = 682667, message = "ID card front must not exceed 500KB"))]
     pub id_card_front: String,
 
-    #[validate(length(max = 5000000, message = "Signature is too large"))]
+    #[validate(length(max = 682667, message = "Signature must not exceed 500KB"))]
     pub customer_signature: String,
 
-    #[validate(length(max = 5000000, message = "Utility bill is too large"))]
+    #[validate(length(max = 682667, message = "Utility bill must not exceed 500KB"))]
     pub utility_bill: String,
 }
 
@@ -188,7 +186,7 @@ pub struct UpgradeTier3Request {
     #[validate(length(min = 11, max = 11, message = "NIN must be 11 digits"))]
     pub nin: Option<String>,
 
-    #[validate(length(min = 1, max = 500000, message = "Proof of address is required for tier 3"))]
+    #[validate(length(min = 1, max = 682667, message = "Proof of address is required for tier 3 and must not exceed 500KB"))]
     pub proof_of_address: String,
 }
 

@@ -462,7 +462,6 @@ async fn check_and_create_reward(db: &PgPool, account_uuid: uuid::Uuid) {
     }
 }
 
-
 pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
     let event: VerifyEmailEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -490,7 +489,6 @@ pub async fn handle_verify_email(payload: &str, db: &PgPool, mailer: &Mailer) {
         Err(e) => println!("[worker/verify_email] DB error: {}", e),
     }
 }
-
 
 /// Sends the welcome email — extracted so every early-return path above still fires it.
 async fn finish_verify_email(event: &VerifyEmailEvent, mailer: &Mailer) {
