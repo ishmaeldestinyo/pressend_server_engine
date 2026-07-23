@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE push_notifications SET status = 'processing'::push_notification_status WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90a5a62f91d89a12b9769236afec3fd1fcba2983ecadb7628293b96ce6336da9"
+}

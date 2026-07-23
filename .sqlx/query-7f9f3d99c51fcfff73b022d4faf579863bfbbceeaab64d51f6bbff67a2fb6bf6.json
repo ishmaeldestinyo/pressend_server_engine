@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) \n        FROM push_notifications\n        WHERE ($1::push_notification_status IS NULL OR status = $1)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "push_notification_status",
+            "kind": {
+              "Enum": [
+                "draft",
+                "scheduled",
+                "processing",
+                "sent",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7f9f3d99c51fcfff73b022d4faf579863bfbbceeaab64d51f6bbff67a2fb6bf6"
+}

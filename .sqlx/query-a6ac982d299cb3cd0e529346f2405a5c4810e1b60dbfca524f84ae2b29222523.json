@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE push_notifications \n            SET status = 'sent'::push_notification_status, total_recipients = 0, successful_sends = 0, failed_sends = 0, sent_at = NOW() \n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a6ac982d299cb3cd0e529346f2405a5c4810e1b60dbfca524f84ae2b29222523"
+}

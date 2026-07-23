@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE push_notifications SET status = 'failed'::push_notification_status, error_log = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c5504389c3daf0c31b2273e1b54fdd3c156870a3d8d13a37ec604119714f7a44"
+}
