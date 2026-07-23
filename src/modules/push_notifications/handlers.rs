@@ -9,7 +9,7 @@ use crate::modules::push_notifications::schemas::{
 };
 use crate::utils::fms::send_push_notification;
 
-/// 1. Send push notification directly to all active accounts with a device_token
+/// 1. Send push notification directly to all active accounts' registered devices
 pub async fn new_push_notification(
     pool: web::Data<PgPool>,
     body: web::Json<SendPushNotificationSchema>,
@@ -46,16 +46,16 @@ pub async fn new_push_notification(
         }
     };
 
-    // 2. Query active device tokens from accounts table
-    // Note: `device_token!` tells SQLx that returned value is non-null String
+    // 2. Query active device tokens from the device_tokens table (one row per
+    //    device, not one column per account) so every device a user is
+    //    signed in on gets the push, not just whichever device logged in last.
     let device_tokens: Vec<String> = match sqlx::query_scalar!(
         r#"
-        SELECT device_token AS "device_token!"
-        FROM accounts 
-        WHERE device_token IS NOT NULL 
-          AND device_token != '' 
-          AND status = 'active'
-          AND deleted_at IS NULL
+        SELECT dt.device_token AS "device_token!"
+        FROM device_tokens dt
+        INNER JOIN accounts a ON a.id = dt.account_id
+        WHERE a.status = 'active'
+          AND a.deleted_at IS NULL
         "#
     )
     .fetch_all(pool.get_ref())
@@ -99,64 +99,57 @@ pub async fn new_push_notification(
         });
     }
 
-    // 3. Dispatch notifications using send_push_notification utility
-    let mut success_count = 0i32;
+    // 3. Spawn background job for sending notifications asynchronously
+    let db_pool = pool.get_ref().clone();
+    let notification_id = notification.id;
+    let title = body.title.clone();
+    let body_text = body.body.clone();
+    let payload = body.data.clone();
 
-    for token in &device_tokens {
-        let payload = body.data.clone();
+    tokio::spawn(async move {
+        let mut success_count = 0i32;
 
-        send_push_notification(
-            token,
-            &body.title,
-            &body.body,
-            payload,
+        for token in &device_tokens {
+            send_push_notification(
+                token,
+                &title,
+                &body_text,
+                payload.clone(),
+            )
+            .await;
+
+            success_count += 1;
+        }
+
+        let fail_count = total_recipients - success_count;
+
+        // Update database with final metrics
+        let _ = sqlx::query!(
+            r#"
+            UPDATE push_notifications
+            SET 
+                status = 'sent'::push_notification_status,
+                sent_at = NOW(),
+                total_recipients = $1,
+                successful_sends = $2,
+                failed_sends = $3
+            WHERE id = $4
+            "#,
+            total_recipients,
+            success_count,
+            fail_count,
+            notification_id
         )
+        .execute(&db_pool)
         .await;
+    });
 
-        success_count += 1;
-    }
-
-    let fail_count = total_recipients - success_count;
-
-    // 4. Update status and metrics after sending batch
-    let updated_notification = sqlx::query_as!(
-        PushNotificationModel,
-        r#"
-        UPDATE push_notifications
-        SET 
-            status = 'sent'::push_notification_status,
-            sent_at = NOW(),
-            total_recipients = $1,
-            successful_sends = $2,
-            failed_sends = $3
-        WHERE id = $4
-        RETURNING 
-            id, title, body, data, target_group, 
-            status AS "status: PushNotificationStatus", 
-            scheduled_at, sent_at, total_recipients, 
-            successful_sends, failed_sends, error_log, 
-            created_by, created_at, updated_at
-        "#,
-        total_recipients,
-        success_count,
-        fail_count,
-        notification.id
-    )
-    .fetch_one(pool.get_ref())
-    .await;
-
-    match updated_notification {
-        Ok(updated) => HttpResponse::Ok().json(ApiResponse {
-            success: true,
-            message: format!("Notification sent to {} device(s)", success_count),
-            data: Some(updated),
-        }),
-        Err(err) => HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            message: format!("Notification sent but failed to update status: {}", err),
-            data: None,
-        }),
-    }
+    // 4. Return immediate 200 OK response to avoid client timeouts
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        message: format!("Dispatching notification in background to {} recipient(s)", total_recipients),
+        data: Some(notification),
+    })
 }
 
 /// 2. Get all notifications (Paginated with optional status filter)
@@ -396,14 +389,15 @@ pub async fn retry_failed_push_notification(
         }
     };
 
+    // Same fix as new_push_notification: read from device_tokens (one row
+    // per device) instead of the old single accounts.device_token column.
     let device_tokens: Vec<String> = match sqlx::query_scalar!(
         r#"
-        SELECT device_token AS "device_token!"
-        FROM accounts 
-        WHERE device_token IS NOT NULL 
-          AND device_token != '' 
-          AND status = 'active'
-          AND deleted_at IS NULL
+        SELECT dt.device_token AS "device_token!"
+        FROM device_tokens dt
+        INNER JOIN accounts a ON a.id = dt.account_id
+        WHERE a.status = 'active'
+          AND a.deleted_at IS NULL
         "#
     )
     .fetch_all(pool.get_ref())
@@ -433,62 +427,55 @@ pub async fn retry_failed_push_notification(
     .execute(pool.get_ref())
     .await;
 
-    let mut success_count = 0i32;
-
-    for token in &device_tokens {
-        let payload = notification.data.clone();
-
-        send_push_notification(
-            token,
-            &notification.title,
-            &notification.body,
-            payload,
-        )
-        .await;
-
-        success_count += 1;
-    }
-
+    // Background spawn for retry
+    let db_pool = pool.get_ref().clone();
+    let notification_id = notification.id;
+    let title = notification.title.clone();
+    let body_text = notification.body.clone();
+    let payload = notification.data.clone();
     let total_recipients = device_tokens.len() as i32;
-    let fail_count = total_recipients - success_count;
 
-    let updated_notification = sqlx::query_as!(
-        PushNotificationModel,
-        r#"
-        UPDATE push_notifications
-        SET 
-            status = 'sent'::push_notification_status,
-            sent_at = NOW(),
-            total_recipients = $1,
-            successful_sends = $2,
-            failed_sends = $3,
-            error_log = NULL
-        WHERE id = $4
-        RETURNING 
-            id, title, body, data, target_group, 
-            status AS "status: PushNotificationStatus", 
-            scheduled_at, sent_at, total_recipients, 
-            successful_sends, failed_sends, error_log, 
-            created_by, created_at, updated_at
-        "#,
-        total_recipients,
-        success_count,
-        fail_count,
-        id
-    )
-    .fetch_one(pool.get_ref())
-    .await;
+    tokio::spawn(async move {
+        let mut success_count = 0i32;
 
-    match updated_notification {
-        Ok(updated) => HttpResponse::Ok().json(ApiResponse {
-            success: true,
-            message: format!("Retry finished: {} delivered, {} failed", success_count, fail_count),
-            data: Some(updated),
-        }),
-        Err(err) => HttpResponse::InternalServerError().json(ApiResponse::<()> {
-            success: false,
-            message: format!("Retry executed but failed to update record: {}", err),
-            data: None,
-        }),
-    }
+        for token in &device_tokens {
+            send_push_notification(
+                token,
+                &title,
+                &body_text,
+                payload.clone(),
+            )
+            .await;
+
+            success_count += 1;
+        }
+
+        let fail_count = total_recipients - success_count;
+
+        let _ = sqlx::query!(
+            r#"
+            UPDATE push_notifications
+            SET 
+                status = 'sent'::push_notification_status,
+                sent_at = NOW(),
+                total_recipients = $1,
+                successful_sends = $2,
+                failed_sends = $3,
+                error_log = NULL
+            WHERE id = $4
+            "#,
+            total_recipients,
+            success_count,
+            fail_count,
+            notification_id
+        )
+        .execute(&db_pool)
+        .await;
+    });
+
+    HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        message: format!("Retry task started in background for {} device(s)", total_recipients),
+        data: Some(notification),
+    })
 }

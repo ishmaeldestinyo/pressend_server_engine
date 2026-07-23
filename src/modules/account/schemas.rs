@@ -233,5 +233,8 @@ pub struct SetPaymentPinRequest {
 pub struct UpdateDeviceTokenRequest {
     #[validate(length(min = 1, message = "Device token cannot be empty"))]
     pub device_token: String,
+
+    #[validate(length(min = 1, message = "Device id cannot be empty"))]
+    pub device_id: String,
 }
 

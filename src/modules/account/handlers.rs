@@ -241,7 +241,6 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
     }))
 }
 
-
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -389,7 +388,6 @@ pub async fn signup(
     })
 }
 
-
 pub async fn send_otp(
     body: web::Json<schemas::SendOTPRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -418,8 +416,6 @@ pub async fn send_otp(
     })
 }
 
-
-
 pub async fn verify_otp(
     body: web::Json<schemas::VerifyOTPRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -429,7 +425,10 @@ pub async fn verify_otp(
     db: web::Data<sqlx::PgPool>,
 ) -> impl Responder {
     if let Err(errors) = body.0.validate() {
-        println!("[verify_otp] validation failed for email={}: {:?}", body.email, errors);
+        println!(
+            "[verify_otp] validation failed for email={}: {:?}",
+            body.email, errors
+        );
         return HttpResponse::UnprocessableEntity().json(ValidationErrorResponse {
             status: "error",
             message: "Invalid input",
@@ -449,7 +448,10 @@ pub async fn verify_otp(
     {
         Ok(v) => v,
         Err(e) => {
-            println!("[verify_otp] Redis GET error for key={}: {}", otp_redis_key, e);
+            println!(
+                "[verify_otp] Redis GET error for key={}: {}",
+                otp_redis_key, e
+            );
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -460,7 +462,10 @@ pub async fn verify_otp(
     let stored_hash = match stored_hash {
         Some(h) => h,
         None => {
-            println!("[verify_otp] no OTP found in redis for email={} (expired or never set)", body.email);
+            println!(
+                "[verify_otp] no OTP found in redis for email={} (expired or never set)",
+                body.email
+            );
             return HttpResponse::BadRequest().json(ApiResponse {
                 message: "Invalid or expired OTP".into(),
                 status: ResponseStatus::ERROR,
@@ -470,7 +475,10 @@ pub async fn verify_otp(
 
     match verify_password(&body.otp, &stored_hash) {
         Ok(true) => {
-            println!("[verify_otp] OTP verified successfully for email={}", body.email);
+            println!(
+                "[verify_otp] OTP verified successfully for email={}",
+                body.email
+            );
         }
         Ok(false) => {
             println!("[verify_otp] OTP mismatch for email={}", body.email);
@@ -480,7 +488,10 @@ pub async fn verify_otp(
             });
         }
         Err(e) => {
-            println!("[verify_otp] OTP hash verification error for email={}: {}", body.email, e);
+            println!(
+                "[verify_otp] OTP hash verification error for email={}: {}",
+                body.email, e
+            );
             return HttpResponse::BadRequest().json(ApiResponse {
                 message: "Invalid or expired OTP".into(),
                 status: ResponseStatus::ERROR,
@@ -521,7 +532,10 @@ pub async fn verify_otp(
             row
         }
         Err(e) => {
-            println!("[verify_otp] DB error fetching account for email={}: {}", email, e);
+            println!(
+                "[verify_otp] DB error fetching account for email={}: {}",
+                email, e
+            );
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -739,7 +753,8 @@ pub async fn verify_otp(
                                     println!(
                                         "[verify_otp] 9PSB open_wallet request — transactionTrackingRef={}, body: {}",
                                         transaction_ref,
-                                        serde_json::to_string_pretty(&open_wallet_body).unwrap_or_default()
+                                        serde_json::to_string_pretty(&open_wallet_body)
+                                            .unwrap_or_default()
                                     );
 
                                     match PsbClient::new(cfg.get_ref())
@@ -755,18 +770,23 @@ pub async fn verify_otp(
                                             println!(
                                                 "[verify_otp] 9PSB open_wallet response — transactionTrackingRef={}, full response: {}",
                                                 transaction_ref,
-                                                serde_json::to_string_pretty(&json).unwrap_or_default()
+                                                serde_json::to_string_pretty(&json)
+                                                    .unwrap_or_default()
                                             );
 
-                                            let status_str =
-                                                json["status"].as_str().unwrap_or("").to_uppercase();
+                                            let status_str = json["status"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_uppercase();
 
                                             if status_str != "SUCCESS" {
                                                 println!(
                                                     "[verify_otp] 9PSB rejected — transactionTrackingRef={}, status: '{}', message: '{}', full response above",
                                                     transaction_ref,
                                                     status_str,
-                                                    json["message"].as_str().unwrap_or("no message")
+                                                    json["message"]
+                                                        .as_str()
+                                                        .unwrap_or("no message")
                                                 );
                                             } else {
                                                 let account_number = json["data"]["accountNumber"]
@@ -901,7 +921,10 @@ pub async fn verify_otp(
     let access_token = match access_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[verify_otp] access token generation failed for account={}: {}", account_id, e);
+            println!(
+                "[verify_otp] access token generation failed for account={}: {}",
+                account_id, e
+            );
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -912,7 +935,10 @@ pub async fn verify_otp(
     let refresh_token = match refresh_token {
         Ok(t) => t,
         Err(e) => {
-            println!("[verify_otp] refresh token generation failed for account={}: {}", account_id, e);
+            println!(
+                "[verify_otp] refresh token generation failed for account={}: {}",
+                account_id, e
+            );
             return HttpResponse::InternalServerError().json(ApiResponse {
                 message: "Service temporarily unavailable".into(),
                 status: ResponseStatus::ERROR,
@@ -920,7 +946,10 @@ pub async fn verify_otp(
         }
     };
 
-    println!("[verify_otp] tokens generated successfully for account={}", account_id);
+    println!(
+        "[verify_otp] tokens generated successfully for account={}",
+        account_id
+    );
 
     let event = VerifyEmailEvent {
         email: body.email.clone(),
@@ -3407,9 +3436,15 @@ pub async fn update_device_token(
     match
         sqlx
             ::query!(
-                "UPDATE accounts SET device_token = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
-                body.device_token,
-                account_uuid
+                r#"
+                INSERT INTO device_tokens (account_id, device_id, device_token, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (account_id, device_id)
+                DO UPDATE SET device_token = EXCLUDED.device_token, updated_at = NOW()
+                "#,
+                account_uuid,
+                body.device_id,
+                body.device_token
             )
             .execute(db.get_ref()).await
     {
@@ -3427,6 +3462,8 @@ pub async fn update_device_token(
         }
     }
 }
+
+
 
 pub async fn wallet_enquiry(
     auth: AuthUser,
