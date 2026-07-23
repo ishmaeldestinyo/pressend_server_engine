@@ -19,6 +19,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 const TTL_1_MIN: u64 = 60;
+const TTL_3_MONTHS: u64 = 60 * 60 * 24 * 90; // 90 days, in seconds
 
 pub async fn get_phone_network(
     query: web::Query<std::collections::HashMap<String, String>>,
@@ -1045,7 +1046,6 @@ pub async fn get_cabletv_fields(
 
 
 
-
 pub async fn validate_biller(
     body: web::Json<schemas::ValidateBillerRequest>,
     cfg: web::Data<Config>,
@@ -1072,7 +1072,7 @@ pub async fn validate_biller(
         body.amount.as_deref().unwrap_or(""),
     );
 
-    // ── Check cache ───────────────────────────────────────────────────────────
+    // ── 1. Check Redis first ───────────────────────────────────────────────────
     let cached: Option<String> = match redis::cmd("GET")
         .arg(&cache_key)
         .query_async(&mut redis_conn)
@@ -1089,12 +1089,12 @@ pub async fn validate_biller(
         }));
     }
 
+    // ── 2. Not in Redis — fetch fresh verified details from VAS ────────────────
     let mut vas_payload = serde_json::json!({
         "billerId":   body.biller_id,
         "customerId": body.customer_id,
     });
 
-    // ── Optional fields ───────────────────────────────────────────────────────
     if let Some(ref item_id) = body.item_id {
         vas_payload["itemId"] = serde_json::Value::String(item_id.clone());
     }
@@ -1122,10 +1122,10 @@ pub async fn validate_biller(
             if status == "SUCCESS" {
                 let data = &res["data"];
 
-                // ── Cache for 1 hr (validation results are short-lived) ───────
+                // ── 3. Save verified details before returning — cached 3 months ──
                 let _: Result<(), _> = redis::cmd("SETEX")
                     .arg(&cache_key)
-                    .arg(3_600u64)
+                    .arg(TTL_3_MONTHS)
                     .arg(data.to_string())
                     .query_async(&mut redis_conn)
                     .await;
@@ -1153,9 +1153,6 @@ pub async fn validate_biller(
         }
     }
 }
-
-
-
 pub async fn bills_payment(
     auth: AuthUser,
     body: web::Json<schemas::BillsPaymentRequest>,

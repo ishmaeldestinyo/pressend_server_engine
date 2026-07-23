@@ -61,6 +61,9 @@ pub struct SignupRequest {
     pub reference: String, // dojah reference
 
     pub referral_code: Option<String>,
+    
+    #[validate(length(min=11, max=15, message="Valid phone number is required"))]
+    pub phone_number: String
 }
 
 

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE accounts SET\n                                                            account_number   = $1,\n                                                            account_name     = $2,\n                                                            bank_name        = '9PSB',\n                                                            firstname        = COALESCE(firstname, $3),\n                                                            lastname         = COALESCE(lastname, $4),\n                                                            othername        = COALESCE(othername, $5),\n                                                            gender           = COALESCE(gender, $6),\n                                                            date_of_birth    = COALESCE(date_of_birth, $7),\n                                                            nin              = COALESCE(nin, $8),\n                                                            bvn              = COALESCE(bvn, $9),\n                                                            current_tier     = GREATEST(current_tier, 1),\n                                                            tier_upgraded_at = NOW(),\n                                                            updated_at       = NOW()\n                                                        WHERE id = $10",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cf378a74e723fca7a5d9e1e642fc6337a12a6d4338cfbdd867bd0fcaf7141ffa"
+}

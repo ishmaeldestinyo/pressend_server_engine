@@ -241,6 +241,7 @@ pub async fn dojah_webhook(body: web::Json<Value>, db: web::Data<PgPool>) -> imp
     }))
 }
 
+
 pub async fn signup(
     body: web::Json<schemas::SignupRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -326,6 +327,34 @@ pub async fn signup(
         }
     }
 
+    // ── Duplicate check — phone number ───────────────────────────────────────
+    // Prevents a silent failure downstream: the worker's INSERT has a unique
+    // constraint on phone_number, and would otherwise fail after this endpoint
+    // already returned 201 Created.
+    let existing_phone = sqlx::query_scalar!(
+        "SELECT id FROM accounts WHERE phone_number = $1 AND deleted_at IS NULL LIMIT 1",
+        body.phone_number
+    )
+    .fetch_optional(db.get_ref())
+    .await;
+
+    match existing_phone {
+        Ok(Some(_)) => {
+            return HttpResponse::Conflict().json(serde_json::json!({
+                "status": "error",
+                "message": "An account with this phone number already exists"
+            }));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[signup] phone number lookup error: {:?}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Something went wrong. Please try again."
+            }));
+        }
+    }
+
     // ── Build and publish signup event ────────────────────────────────────────
     let otp_redis_key = format!("{}.verify.otp", body.email);
 
@@ -343,7 +372,7 @@ pub async fn signup(
         middlename: None,
         date_of_birth: None,
         gender: None,
-        mobile_number: None,
+        mobile_number: Some(body.phone_number.clone()),
         address: None,
         city: None,
         state: None,
@@ -359,7 +388,6 @@ pub async fn signup(
         status: ResponseStatus::SUCCESS,
     })
 }
-
 
 
 pub async fn send_otp(
@@ -472,8 +500,10 @@ pub async fn verify_otp(
                 Err(e) => println!("[verify_otp] failed to delete OTP key={}: {}", otp_redis_key, e),
             }
         },
+        // ── phone_number added — now sourced from the account row (set at
+        //    signup) instead of from KYC data below. ─────────────────────────
         sqlx::query!(
-            r#"SELECT id, email, firstname, lastname, address, account_number, kyc_reference
+            r#"SELECT id, email, firstname, lastname, address, account_number, kyc_reference, phone_number
                FROM accounts WHERE email = $1"#,
             email
         )
@@ -519,14 +549,12 @@ pub async fn verify_otp(
                     n.last_name                      AS "nin_last_name?",
                     n.gender                         AS "nin_gender?",
                     n.date_of_birth                  AS "nin_dob?",
-                    n.phone_number                   AS "nin_phone?",
                     b.bvn                            AS "bvn?",
                     b.first_name                     AS "bvn_first_name?",
                     b.middle_name                    AS "bvn_middle_name?",
                     b.last_name                      AS "bvn_last_name?",
                     b.gender                         AS "bvn_gender?",
-                    b.date_of_birth                  AS "bvn_dob?",
-                    b.phone_number                   AS "bvn_phone?"
+                    b.date_of_birth                  AS "bvn_dob?"
                 FROM kyc_verifications kv
                 LEFT JOIN kyc_nin_data n ON n.kyc_verification_id = kv.id
                 LEFT JOIN kyc_bvn_data b ON b.kyc_verification_id = kv.id
@@ -558,7 +586,6 @@ pub async fn verify_otp(
                                     .nin_dob
                                     .map(|d| d.format("%Y-%m-%d").to_string())
                                     .unwrap_or_default(),
-                                identity.nin_phone.clone().unwrap_or_default(),
                             )
                         }),
                         "BVN" => identity.bvn.clone().map(|bvn| {
@@ -573,7 +600,6 @@ pub async fn verify_otp(
                                     .bvn_dob
                                     .map(|d| d.format("%Y-%m-%d").to_string())
                                     .unwrap_or_default(),
-                                identity.bvn_phone.clone().unwrap_or_default(),
                             )
                         }),
                         other => {
@@ -593,7 +619,6 @@ pub async fn verify_otp(
                         last_name,
                         gender,
                         dob,
-                        phone,
                     )) = parsed
                     {
                         if id_value.is_empty() {
@@ -687,11 +712,17 @@ pub async fn verify_otp(
                                     let transaction_ref = uuid::Uuid::new_v4().to_string();
                                     let address = account.address.clone().unwrap_or_default();
 
+                                    // ── Phone now comes from the account row (set at signup),
+                                    //    not from KYC data. Column is nullable
+                                    //    (phone_number VARCHAR(15), no NOT NULL), so
+                                    //    account.phone_number is Option<String>. ─────────────
+                                    let phone_no = account.phone_number.clone().unwrap_or_default();
+
                                     let mut open_wallet_body = serde_json::json!({
                                         "transactionTrackingRef": transaction_ref,
                                         "lastName":               last_name,
                                         "otherNames":             other_names,
-                                        "phoneNo":                phone,
+                                        "phoneNo":                phone_no,
                                         "gender":                 gender_code,
                                         "dateOfBirth":            date_of_birth_fmt,
                                         "address":                address,
@@ -769,6 +800,9 @@ pub async fn verify_otp(
                                                         None
                                                     };
 
+                                                    // ── phone_number no longer written here — it's
+                                                    //    already set at signup and shouldn't be
+                                                    //    overwritten by KYC-sourced data. ───────────
                                                     match sqlx::query!(
                                                         r#"UPDATE accounts SET
                                                             account_number   = $1,
@@ -777,21 +811,19 @@ pub async fn verify_otp(
                                                             firstname        = COALESCE(firstname, $3),
                                                             lastname         = COALESCE(lastname, $4),
                                                             othername        = COALESCE(othername, $5),
-                                                            phone_number     = COALESCE(phone_number, $6),
-                                                            gender           = COALESCE(gender, $7),
-                                                            date_of_birth    = COALESCE(date_of_birth, $8),
-                                                            nin              = COALESCE(nin, $9),
-                                                            bvn              = COALESCE(bvn, $10),
+                                                            gender           = COALESCE(gender, $6),
+                                                            date_of_birth    = COALESCE(date_of_birth, $7),
+                                                            nin              = COALESCE(nin, $8),
+                                                            bvn              = COALESCE(bvn, $9),
                                                             current_tier     = GREATEST(current_tier, 1),
                                                             tier_upgraded_at = NOW(),
                                                             updated_at       = NOW()
-                                                        WHERE id = $11"#,
+                                                        WHERE id = $10"#,
                                                         account_number,
                                                         account_name,
                                                         first_name,
                                                         last_name,
                                                         middle_name,
-                                                        phone,
                                                         gender,
                                                         dob,
                                                         nin_val,
@@ -912,7 +944,6 @@ pub async fn verify_otp(
         refresh_token: Some(refresh_token),
     })
 }
-
 
 pub async fn signin(
     body: web::Json<schemas::SignInRequest>,

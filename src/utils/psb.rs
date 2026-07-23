@@ -27,8 +27,8 @@ impl PsbClient {
 
     // ── Authenticate ──────────────────────────────────────────────────────────
     async fn authenticate(&self) -> Result<serde_json::Value, String> {
-
-        let res = self.client
+        let res = self
+            .client
             .post(format!("{}/waas/api/v1/authenticate", self.base_url))
             .json(&serde_json::json!({
                 "username": self.username,
@@ -40,14 +40,18 @@ impl PsbClient {
             .await
             .map_err(|e| format!("Auth HTTP error: {}", e))?;
 
-        let body = res.text().await.map_err(|e| format!("Auth read error: {}", e))?;
+        let body = res
+            .text()
+            .await
+            .map_err(|e| format!("Auth read error: {}", e))?;
 
         serde_json::from_str(&body).map_err(|e| format!("Auth parse error: {}", e))
     }
 
     // ── Refresh token ─────────────────────────────────────────────────────────
     async fn refresh(&self, refresh_token: &str) -> Result<serde_json::Value, String> {
-        let res = self.client
+        let res = self
+            .client
             .post(format!("{}/waas/api/v1/token/refresh", self.base_url))
             .json(&serde_json::json!({
                 "refreshToken": refresh_token,
@@ -69,9 +73,11 @@ impl PsbClient {
         redis: &mut ConnectionManager,
         data: &serde_json::Value,
     ) -> Result<(), String> {
-        let access_token = data["accessToken"].as_str()
+        let access_token = data["accessToken"]
+            .as_str()
             .ok_or("No accessToken in response")?;
-        let refresh_token = data["refreshToken"].as_str()
+        let refresh_token = data["refreshToken"]
+            .as_str()
             .ok_or("No refreshToken in response")?;
         let access_expires_in = data["expiresIn"].as_i64().unwrap_or(3600) - 60;
         let refresh_expires_in = data["refreshExpiresIn"].as_i64().unwrap_or(86400) - 60;
@@ -128,7 +134,6 @@ impl PsbClient {
             }
         }
 
-
         // ── Full authentication ───────────────────────────────────────────────
         let data = self.authenticate().await?;
 
@@ -151,7 +156,8 @@ impl PsbClient {
         let token = self.get_access_token(redis).await?;
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let res = self.client
+        let res = self
+            .client
             .post(&url)
             .bearer_auth(&token)
             .json(body)
@@ -159,7 +165,6 @@ impl PsbClient {
             .await
             .map_err(|e| format!("HTTP error: {}", e))?;
 
-        // ── If 401 — invalidate token and retry once ──────────────────────────
         if res.status() == 401 {
             let _ = redis::cmd("DEL")
                 .arg(WAAS_ACCESS_TOKEN_KEY)
@@ -167,7 +172,8 @@ impl PsbClient {
                 .await;
 
             let token = self.get_access_token(redis).await?;
-            let res = self.client
+            let res = self
+                .client
                 .post(&url)
                 .bearer_auth(&token)
                 .json(body)
@@ -175,9 +181,25 @@ impl PsbClient {
                 .await
                 .map_err(|e| format!("HTTP retry error: {}", e))?;
 
-            return res.json::<serde_json::Value>()
+            if !res.status().is_success() {
+                let status = res.status();
+                let body = res.text().await.unwrap_or_default();
+                return Err(format!(
+                    "PSB POST {} failed after retry: {} — {}",
+                    url, status, body
+                ));
+            }
+
+            return res
+                .json::<serde_json::Value>()
                 .await
                 .map_err(|e| format!("Response parse error: {}", e));
+        }
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            return Err(format!("PSB POST {} failed: {} — {}", url, status, body));
         }
 
         res.json::<serde_json::Value>()
@@ -193,12 +215,50 @@ impl PsbClient {
         let token = self.get_access_token(redis).await?;
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let res = self.client
+        let res = self
+            .client
             .get(&url)
             .bearer_auth(&token)
             .send()
             .await
             .map_err(|e| format!("HTTP error: {}", e))?;
+
+        // ── If 401 — invalidate token and retry once ──────────────────────────
+        if res.status() == 401 {
+            let _ = redis::cmd("DEL")
+                .arg(WAAS_ACCESS_TOKEN_KEY)
+                .query_async::<_, ()>(redis)
+                .await;
+
+            let token = self.get_access_token(redis).await?;
+            let res = self
+                .client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| format!("HTTP retry error: {}", e))?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let body = res.text().await.unwrap_or_default();
+                return Err(format!(
+                    "PSB GET {} failed after retry: {} — {}",
+                    url, status, body
+                ));
+            }
+
+            return res
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("Response parse error: {}", e));
+        }
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            return Err(format!("PSB GET {} failed: {} — {}", url, status, body));
+        }
 
         res.json::<serde_json::Value>()
             .await
