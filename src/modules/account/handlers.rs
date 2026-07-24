@@ -416,6 +416,26 @@ pub async fn send_otp(
     })
 }
 
+
+/// 9PSB wraps the real reason in parentheses, e.g.
+/// "Bvn Validation Not successful (Phone number supplied not matching NIN phone number)"
+/// This extracts just the inner part so it reads cleanly for the end user.
+fn friendly_9psb_message(raw: &str) -> String {
+    if let (Some(start), Some(end)) = (raw.find('('), raw.rfind(')')) {
+        if end > start {
+            let inner = raw[start + 1..end].trim();
+            if !inner.is_empty() {
+                let mut chars = inner.chars();
+                return match chars.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => inner.to_string(),
+                };
+            }
+        }
+    }
+    raw.trim().to_string()
+}
+
 pub async fn verify_otp(
     body: web::Json<schemas::VerifyOTPRequest>,
     kafka: web::Data<KafkaProducer>,
@@ -563,6 +583,7 @@ pub async fn verify_otp(
                     n.last_name                      AS "nin_last_name?",
                     n.gender                         AS "nin_gender?",
                     n.date_of_birth                  AS "nin_dob?",
+                    n.phone_number                   AS "nin_phone_number?",
                     b.bvn                            AS "bvn?",
                     b.first_name                     AS "bvn_first_name?",
                     b.middle_name                    AS "bvn_middle_name?",
@@ -726,11 +747,33 @@ pub async fn verify_otp(
                                     let transaction_ref = uuid::Uuid::new_v4().to_string();
                                     let address = account.address.clone().unwrap_or_default();
 
-                                    // ── Phone now comes from the account row (set at signup),
-                                    //    not from KYC data. Column is nullable
-                                    //    (phone_number VARCHAR(15), no NOT NULL), so
-                                    //    account.phone_number is Option<String>. ─────────────
-                                    let phone_no = account.phone_number.clone().unwrap_or_default();
+                                    // ── 9PSB requires the phone number used for wallet opening
+                                    //    to match the phone number on the NIN KYC record. So we
+                                    //    prefer identity.nin_phone_number (kyc_nin_data.phone_number)
+                                    //    when this is a NIN verification and that value is present.
+                                    //    Fall back to the account's own phone_number (set at
+                                    //    signup) for BVN verifications, or if the NIN KYC record
+                                    //    has no phone number on file. ─────────────────────────
+                                    let phone_no = if id_type == "NIN" {
+                                        match identity.nin_phone_number.clone() {
+                                            Some(p) if !p.trim().is_empty() => {
+                                                println!(
+                                                    "[verify_otp] using NIN KYC phone_number for 9PSB wallet opening — account={}",
+                                                    account.id
+                                                );
+                                                p
+                                            }
+                                            _ => {
+                                                println!(
+                                                    "[verify_otp] NIN KYC phone_number missing/empty — falling back to account phone_number — account={}",
+                                                    account.id
+                                                );
+                                                account.phone_number.clone().unwrap_or_default()
+                                            }
+                                        }
+                                    } else {
+                                        account.phone_number.clone().unwrap_or_default()
+                                    };
 
                                     let mut open_wallet_body = serde_json::json!({
                                         "transactionTrackingRef": transaction_ref,
@@ -780,14 +823,24 @@ pub async fn verify_otp(
                                                 .to_uppercase();
 
                                             if status_str != "SUCCESS" {
+                                                let raw_message = json["message"]
+                                                    .as_str()
+                                                    .unwrap_or("Identity verification failed");
+                                                let friendly_message =
+                                                    friendly_9psb_message(raw_message);
+
                                                 println!(
-                                                    "[verify_otp] 9PSB rejected — transactionTrackingRef={}, status: '{}', message: '{}', full response above",
+                                                    "[verify_otp] 9PSB rejected — transactionTrackingRef={}, status: '{}', raw_message: '{}', friendly_message: '{}'",
                                                     transaction_ref,
                                                     status_str,
-                                                    json["message"]
-                                                        .as_str()
-                                                        .unwrap_or("no message")
+                                                    raw_message,
+                                                    friendly_message
                                                 );
+
+                                                return HttpResponse::UnprocessableEntity().json(ApiResponse {
+                                                    message: friendly_message,
+                                                    status: ResponseStatus::ERROR,
+                                                });
                                             } else {
                                                 let account_number = json["data"]["accountNumber"]
                                                     .as_str()
@@ -808,6 +861,11 @@ pub async fn verify_otp(
                                                         "[verify_otp] accountNumber empty in 9PSB SUCCESS response — transactionTrackingRef={}",
                                                         transaction_ref
                                                     );
+
+                                                    return HttpResponse::InternalServerError().json(ApiResponse {
+                                                        message: "Wallet creation failed. Please try again shortly.".into(),
+                                                        status: ResponseStatus::ERROR,
+                                                    });
                                                 } else {
                                                     let nin_val = if id_type == "NIN" {
                                                         Some(id_value.clone())
@@ -874,6 +932,11 @@ pub async fn verify_otp(
                                                 "[verify_otp] 9PSB open_wallet call failed — transactionTrackingRef={}, error: {}",
                                                 transaction_ref, e
                                             );
+
+                                            return HttpResponse::InternalServerError().json(ApiResponse {
+                                                message: "Service temporarily unavailable. Please try again shortly.".into(),
+                                                status: ResponseStatus::ERROR,
+                                            });
                                         }
                                     }
                                 }
@@ -973,6 +1036,7 @@ pub async fn verify_otp(
         refresh_token: Some(refresh_token),
     })
 }
+
 
 pub async fn signin(
     body: web::Json<schemas::SignInRequest>,

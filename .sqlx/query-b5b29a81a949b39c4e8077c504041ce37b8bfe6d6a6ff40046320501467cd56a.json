@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT\n                    kv.id_type                       AS \"id_type!\",\n                    n.nin                            AS \"nin?\",\n                    n.first_name                     AS \"nin_first_name?\",\n                    n.middle_name                    AS \"nin_middle_name?\",\n                    n.last_name                      AS \"nin_last_name?\",\n                    n.gender                         AS \"nin_gender?\",\n                    n.date_of_birth                  AS \"nin_dob?\",\n                    n.phone_number                   AS \"nin_phone_number?\",\n                    b.bvn                            AS \"bvn?\",\n                    b.first_name                     AS \"bvn_first_name?\",\n                    b.middle_name                    AS \"bvn_middle_name?\",\n                    b.last_name                      AS \"bvn_last_name?\",\n                    b.gender                         AS \"bvn_gender?\",\n                    b.date_of_birth                  AS \"bvn_dob?\"\n                FROM kyc_verifications kv\n                LEFT JOIN kyc_nin_data n ON n.kyc_verification_id = kv.id\n                LEFT JOIN kyc_bvn_data b ON b.kyc_verification_id = kv.id\n                WHERE kv.reference_id = $1\n                ORDER BY kv.created_at DESC\n                LIMIT 1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "nin?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "nin_first_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "nin_middle_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "nin_last_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "nin_gender?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "nin_dob?",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 7,
+        "name": "nin_phone_number?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "bvn?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "bvn_first_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "bvn_middle_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "bvn_last_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "bvn_gender?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "bvn_dob?",
+        "type_info": "Date"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b5b29a81a949b39c4e8077c504041ce37b8bfe6d6a6ff40046320501467cd56a"
+}

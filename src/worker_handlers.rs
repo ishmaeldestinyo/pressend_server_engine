@@ -1464,55 +1464,88 @@ pub async fn handle_internal_transfer(
         }
     };
 
-    // ── Format amount once for reuse across notifications ─────────────────────
+    // ── 9PSB's own bank code. Internal transfers move between two Pressend
+    //    wallets, both hosted on 9PSB, so "bank" on the customer.account block
+    //    is always 9PSB's own code, and the transfer is flagged as P2P rather
+    //    than INTRA_BANK/OTHER_BANK (those are for the external-transfer flow). ──
+    const NINE_PSB_BANK_CODE: &str = "120001";
 
-    // ── 1. PSB debit sender ───────────────────────────────────────────────────
-    let debit_payload = serde_json::json!({
-        "accountNo":     event.sender_account,
-        "narration":     event.narration,
-        "totalAmount":   event.amount.parse::<f64>().unwrap_or(0.0),
-        "transactionId": event.reference,
-        "merchant": {
-            "isFee":  false,
-            "merchantAccount": "",
-            "merchantFeeAmount":  ""
-        }
-    });
+    // ── Fetch sender + receiver display info up front — needed both for the
+    //    PSB payload (name/sendername) and for the sender's push notification
+    //    later. ───────────────────────────────────────────────────────────────
+    let (sender_info, reciever_info) = tokio::join!(
+        sqlx::query!(
+            "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
+            sender_uuid
+        )
+        .fetch_optional(db),
+        sqlx::query!(
+            "SELECT firstname, lastname FROM accounts WHERE id = $1",
+            reciever_uuid
+        )
+        .fetch_optional(db)
+    );
 
-    match PsbClient::new(cfg)
-        .post(redis, "/waas/api/v1/debit/transfer", &debit_payload)
-        .await
-    {
-        Ok(res) => {
-            let status = res["status"].as_str().unwrap_or("").to_uppercase();
-            if status != "SUCCESS" {
-                let _ = insert_transaction(
-                    db,
-                    sender_uuid,
-                    reciever_uuid,
-                    &event.reference,
-                    "debit",
-                    &event.amount,
-                    &event.narration,
-                    "failed",
-                )
-                .await;
-                return;
+    let sender_display_name = match &sender_info {
+        Ok(Some(row)) => {
+            let name = format!(
+                "{} {}",
+                row.firstname.as_deref().unwrap_or(""),
+                row.lastname.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string();
+            if name.is_empty() {
+                event.sender_account.clone()
+            } else {
+                name
             }
         }
-        Err(_e) => {
-            return;
+        _ => event.sender_account.clone(),
+    };
+
+    let recipient_display_name = match &reciever_info {
+        Ok(Some(row)) => {
+            let name = format!(
+                "{} {}",
+                row.firstname.as_deref().unwrap_or(""),
+                row.lastname.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string();
+            if name.is_empty() {
+                event.recipient_account.clone()
+            } else {
+                name
+            }
         }
-    }
+        _ => event.recipient_account.clone(),
+    };
 
-    // ── 2. PSB credit reciever ────────────────────────────────────────────────
-    let credit_ref = format!("{}-CR", event.reference);
-
-    let credit_payload = serde_json::json!({
-        "accountNo":     event.recipient_account,
-        "narration":     event.narration,
-        "totalAmount":   event.amount.parse::<f64>().unwrap_or(0.0),
-        "transactionId": credit_ref,
+    // ── Call 9PSB wallet_other_banks — P2P transfer between two Pressend
+    //    wallets. Replaces the previous separate /debit/transfer +
+    //    /credit/transfer calls with a single atomic PSB call. ────────────────
+    let psb_payload = serde_json::json!({
+        "customer": {
+            "account": {
+                "bank":                NINE_PSB_BANK_CODE,
+                "name":                recipient_display_name,
+                "number":              event.recipient_account,
+                "senderaccountnumber": event.sender_account,
+                "sendername":          sender_display_name,
+            }
+        },
+        "narration": event.narration,
+        "order": {
+            "amount":      event.amount,
+            "country":     "NGA",
+            "currency":    "NGN",
+            "description": event.narration,
+        },
+        "transaction": {
+            "reference": event.reference,
+        },
+        "transactionType": "P2P",
         "merchant": {
             "isFee":              false,
             "merchantFeeAccount": "",
@@ -1520,76 +1553,81 @@ pub async fn handle_internal_transfer(
         }
     });
 
-    match PsbClient::new(cfg)
-        .post(redis, "/waas/api/v1/credit/transfer", &credit_payload)
+    let psb_res = match PsbClient::new(cfg)
+        .post(redis, "/waas/api/v1/wallet_other_banks", &psb_payload)
         .await
     {
-        Ok(res) => {
-            let status = res["status"].as_str().unwrap_or("").to_uppercase();
-            if status != "SUCCESS" {
-                // ── Debit succeeded but credit failed — record both ────────────
-                let failed_credit_ref = format!("{}-CR", event.reference);
-                let _ = tokio::join!(
-                    insert_transaction(
-                        db,
-                        sender_uuid,
-                        reciever_uuid,
-                        &event.reference,
-                        "debit",
-                        &event.amount,
-                        &event.narration,
-                        "success"
-                    ),
-                    insert_transaction(
-                        db,
-                        sender_uuid,
-                        reciever_uuid,
-                        &failed_credit_ref,
-                        "credit",
-                        &event.amount,
-                        &event.narration,
-                        "failed"
-                    )
-                );
-                // ── Notify sender only — credit failed so reciever gets nothing ─
-                let sender_token = sqlx::query_scalar!(
-                    "SELECT device_token FROM accounts WHERE id = $1",
-                    sender_uuid
-                )
-                .fetch_optional(db)
-                .await
-                .ok()
-                .flatten()
-                .flatten();
-
-                if let Some(token) = sender_token {
-                    send_push_notification(
-                        &token,
-                        "Pressend Transfer Issue",
-                        &format!(
-                            "Your transfer of ₦{} could not be completed. You will be refunded.",
-                            &event.amount
-                        ),
-                        Some(serde_json::json!({
-                            "route":     "NotificationDetail",
-                            "service":   "transfer_sent",
-                            "status":    "failed",
-                            "amount":    &event.amount,
-                            "reference": event.reference,
-                            "narration": "Transfer could not be completed. Refund in progress.",
-                        })),
-                    )
-                    .await;
-                }
-                return;
-            }
-        }
-        Err(_e) => {
+        Ok(res) => res,
+        Err(e) => {
+            println!(
+                "[worker/internal_transfer] PSB error — ref: {}, error: {}",
+                event.reference, e
+            );
             return;
         }
+    };
+
+    println!("[worker/internal_transfer] PSB response: {:?}", psb_res);
+
+    let status = psb_res["status"].as_str().unwrap_or("").to_uppercase();
+
+    if status != "SUCCESS" {
+        // ── PSB call failed as a single atomic operation — record both ledger
+        //    legs as failed together and notify the sender. ───────────────────
+        let failed_credit_ref = format!("{}-CR", event.reference);
+        let _ = tokio::join!(
+            insert_transaction(
+                db,
+                sender_uuid,
+                reciever_uuid,
+                &event.reference,
+                "debit",
+                &event.amount,
+                &event.narration,
+                "failed"
+            ),
+            insert_transaction(
+                db,
+                sender_uuid,
+                reciever_uuid,
+                &failed_credit_ref,
+                "credit",
+                &event.amount,
+                &event.narration,
+                "failed"
+            )
+        );
+
+        if let Ok(Some(row)) = &sender_info {
+            if let Some(token) = &row.device_token {
+                send_push_notification(
+                    token,
+                    "Pressend Transfer Issue",
+                    &format!(
+                        "Your transfer of ₦{} could not be completed. You will be refunded.",
+                        &event.amount
+                    ),
+                    Some(serde_json::json!({
+                        "route":     "NotificationDetail",
+                        "service":   "transfer_sent",
+                        "status":    "failed",
+                        "amount":    &event.amount,
+                        "reference": event.reference,
+                        "narration": "Transfer could not be completed. Refund in progress.",
+                    })),
+                )
+                .await;
+            }
+        }
+
+        println!(
+            "[worker/internal_transfer] ── Failed — ref: {}, status: '{}' ──",
+            event.reference, status
+        );
+        return;
     }
 
-    // ── 3. Both legs succeeded — insert DB records concurrently ──────────────
+    // ── Success — insert DB ledger records for both legs concurrently ────────
     let success_credit_ref = format!("{}-CR", event.reference);
 
     let (debit_result, credit_result) = tokio::join!(
@@ -1615,7 +1653,14 @@ pub async fn handle_internal_transfer(
         )
     );
 
-    // ── 4. Track sender's daily transaction total in Redis ───────────────────
+    if let Err(e) = debit_result {
+        println!("[worker/internal_transfer] Debit DB insert error: {}", e);
+    }
+    if let Err(e) = credit_result {
+        println!("[worker/internal_transfer] Credit DB insert error: {}", e);
+    }
+
+    // ── Track sender's daily transaction total in Redis ───────────────────────
     let amount_f64 = event.amount.parse::<f64>().unwrap_or(0.0);
     let today = chrono::Utc::now().format("%Y-%m-%d");
     let daily_key = format!("daily_txn_total:{}:{}", sender_uuid, today);
@@ -1649,49 +1694,8 @@ pub async fn handle_internal_transfer(
         }
     }
 
-    if let Err(e) = debit_result {
-        println!("[worker/internal_transfer] Debit DB insert error: {}", e);
-    }
-    if let Err(e) = credit_result {
-        println!("[worker/internal_transfer] Credit DB insert error: {}", e);
-    }
-
-    // ── 5. Push notification — sender only ────────────────────────────────────
-    // Receiver credit alert is handled by  via PSB webhook
-    let sender_info = sqlx::query!(
-        "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
-        sender_uuid
-    )
-    .fetch_optional(db)
-    .await;
-
-    let reciever_info = sqlx::query!(
-        "SELECT firstname, lastname FROM accounts WHERE id = $1",
-        reciever_uuid
-    )
-    .fetch_optional(db)
-    .await;
-
-    // ── Build recipient display name for sender notification ──────────────────
-    let recipient_display_name = match &reciever_info {
-        Ok(Some(row)) => {
-            let name = format!(
-                "{} {}",
-                row.firstname.as_deref().unwrap_or(""),
-                row.lastname.as_deref().unwrap_or("")
-            )
-            .trim()
-            .to_string();
-            if name.is_empty() {
-                event.recipient_account.clone()
-            } else {
-                name
-            }
-        }
-        _ => event.recipient_account.clone(),
-    };
-
-    // Notify Sender (Confirmation)
+    // ── Push notification — sender only. Receiver credit alert is handled by
+    //    the PSB inbound webhook (handle_transfer_inflow), same as before. ────
     if let Ok(Some(row)) = &sender_info {
         if let Some(token) = &row.device_token {
             send_push_notification(
@@ -1719,6 +1723,8 @@ pub async fn handle_internal_transfer(
         event.reference, event.sender_account, event.recipient_account, event.amount
     );
 }
+
+
 
 pub async fn handle_transfer_inflow(
     payload: &str,
@@ -2115,6 +2121,23 @@ pub async fn handle_external_transfer(
         }
     };
 
+    // ── 9PSB's own bank code. When the recipient's bank_code matches this,
+    //    the transfer stays entirely within 9PSB's rails and must be flagged
+    //    as INTRA_BANK. Every other bank code is a real inter-bank transfer,
+    //    which 9PSB treats as OTHER_BANK (their documented default). ─────────
+    const NINE_PSB_BANK_CODE: &str = "120001";
+
+    let transaction_type = if event.bank_code == NINE_PSB_BANK_CODE {
+        "INTRA_BANK"
+    } else {
+        "OTHER_BANK"
+    };
+
+    println!(
+        "[worker/external_transfer] resolved transactionType={} for bank_code={} — ref: {}",
+        transaction_type, event.bank_code, event.reference
+    );
+
     // ── Format amount once for reuse across notifications ─────────────────────
     // ── Call 9PSB wallet_other_banks ──────────────────────────────────────────
     let psb_payload = serde_json::json!({
@@ -2137,6 +2160,7 @@ pub async fn handle_external_transfer(
         "transaction": {
             "reference": event.reference,
         },
+        "transactionType": transaction_type,
         "merchant": {
             "isFee":              false,
             "merchantFeeAccount": "",
@@ -2203,6 +2227,7 @@ pub async fn handle_external_transfer(
                     "recipient_name":   event.recipient_name,
                     "recipient_number": event.recipient_number,
                     "bank_code":        event.bank_code,
+                    "transaction_type": transaction_type,
                     "psb_response_code": res["responseCode"].as_str().unwrap_or(""),
                 })
             )
@@ -2275,8 +2300,8 @@ pub async fn handle_external_transfer(
             }
 
             println!(
-                "[worker/external_transfer] ── Complete — ref: {}, status: {} ──",
-                event.reference, tx_status
+                "[worker/external_transfer] ── Complete — ref: {}, status: {}, transactionType: {} ──",
+                event.reference, tx_status, transaction_type
             );
         }
         Err(e) => {
@@ -2287,6 +2312,7 @@ pub async fn handle_external_transfer(
         }
     }
 }
+
 
 pub async fn handle_airtime_purchase(
     payload: &str,
