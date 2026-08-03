@@ -1436,6 +1436,22 @@ pub async fn handle_set_payment_pin(payload: &str, mailer: &Mailer) {
     }
 }
 
+// ── Shared helpers ──────────────────────────────────────────────────────────────
+
+/// Fetches every registered device token for an account from the `device_tokens`
+/// table (replaces the old single `accounts.device_token` column — an account
+/// can now have one row per logged-in device). Push notifications should be
+/// fanned out to all of them.
+async fn get_device_tokens(db: &PgPool, account_id: uuid::Uuid) -> Vec<String> {
+    sqlx::query_scalar!(
+        "SELECT device_token FROM device_tokens WHERE account_id = $1",
+        account_id
+    )
+    .fetch_all(db)
+    .await
+    .unwrap_or_default()
+}
+
 pub async fn handle_internal_transfer(
     payload: &str,
     db: &PgPool,
@@ -1470,12 +1486,12 @@ pub async fn handle_internal_transfer(
     //    than INTRA_BANK/OTHER_BANK (those are for the external-transfer flow). ──
     const NINE_PSB_BANK_CODE: &str = "120001";
 
-    // ── Fetch sender + receiver display info up front — needed both for the
-    //    PSB payload (name/sendername) and for the sender's push notification
-    //    later. ───────────────────────────────────────────────────────────────
-    let (sender_info, reciever_info) = tokio::join!(
+    // ── Fetch sender + receiver display info, plus the sender's device tokens,
+    //    up front — needed both for the PSB payload (name/sendername) and for
+    //    the sender's push notification later. ─────────────────────────────────
+    let (sender_info, reciever_info, sender_tokens) = tokio::join!(
         sqlx::query!(
-            "SELECT device_token, firstname, lastname FROM accounts WHERE id = $1",
+            "SELECT firstname, lastname FROM accounts WHERE id = $1",
             sender_uuid
         )
         .fetch_optional(db),
@@ -1483,7 +1499,8 @@ pub async fn handle_internal_transfer(
             "SELECT firstname, lastname FROM accounts WHERE id = $1",
             reciever_uuid
         )
-        .fetch_optional(db)
+        .fetch_optional(db),
+        get_device_tokens(db, sender_uuid)
     );
 
     let sender_display_name = match &sender_info {
@@ -1598,26 +1615,24 @@ pub async fn handle_internal_transfer(
             )
         );
 
-        if let Ok(Some(row)) = &sender_info {
-            if let Some(token) = &row.device_token {
-                send_push_notification(
-                    token,
-                    "Pressend Transfer Issue",
-                    &format!(
-                        "Your transfer of ₦{} could not be completed. You will be refunded.",
-                        &event.amount
-                    ),
-                    Some(serde_json::json!({
-                        "route":     "NotificationDetail",
-                        "service":   "transfer_sent",
-                        "status":    "failed",
-                        "amount":    &event.amount,
-                        "reference": event.reference,
-                        "narration": "Transfer could not be completed. Refund in progress.",
-                    })),
-                )
-                .await;
-            }
+        for token in &sender_tokens {
+            send_push_notification(
+                token,
+                "Pressend Transfer Issue",
+                &format!(
+                    "Your transfer of ₦{} could not be completed. You will be refunded.",
+                    &event.amount
+                ),
+                Some(serde_json::json!({
+                    "route":     "NotificationDetail",
+                    "service":   "transfer_sent",
+                    "status":    "failed",
+                    "amount":    &event.amount,
+                    "reference": event.reference,
+                    "narration": "Transfer could not be completed. Refund in progress.",
+                })),
+            )
+            .await;
         }
 
         println!(
@@ -1694,28 +1709,27 @@ pub async fn handle_internal_transfer(
         }
     }
 
-    // ── Push notification — sender only. Receiver credit alert is handled by
-    //    the PSB inbound webhook (handle_transfer_inflow), same as before. ────
-    if let Ok(Some(row)) = &sender_info {
-        if let Some(token) = &row.device_token {
-            send_push_notification(
-                token,
-                "Transfer Successful",
-                &format!(
-                    "₦{} sent successfully to {}",
-                    &event.amount, recipient_display_name
-                ),
-                Some(serde_json::json!({
-                    "route":     "NotificationDetail",
-                    "service":   "transfer_sent",
-                    "status":    "success",
-                    "amount":    &event.amount,
-                    "reference": event.reference,
-                    "recipient": recipient_display_name,
-                })),
-            )
-            .await;
-        }
+    // ── Push notification — sender only (all registered devices). Receiver
+    //    credit alert is handled by the PSB inbound webhook
+    //    (handle_transfer_inflow), same as before. ──────────────────────────────
+    for token in &sender_tokens {
+        send_push_notification(
+            token,
+            "Transfer Successful",
+            &format!(
+                "₦{} sent successfully to {}",
+                &event.amount, recipient_display_name
+            ),
+            Some(serde_json::json!({
+                "route":     "NotificationDetail",
+                "service":   "transfer_sent",
+                "status":    "success",
+                "amount":    &event.amount,
+                "reference": event.reference,
+                "recipient": recipient_display_name,
+            })),
+        )
+        .await;
     }
 
     println!(
@@ -1811,7 +1825,7 @@ pub async fn handle_transfer_inflow(
     // ── transactionref not found — external inbound transfer ──────────────────
     let receiver = match sqlx::query!(
         r#"
-        SELECT id, device_token, account_type, account_name
+        SELECT id, account_type, account_name
         FROM accounts
         WHERE account_number = $1 AND deleted_at IS NULL
         "#,
@@ -1833,6 +1847,10 @@ pub async fn handle_transfer_inflow(
             return;
         }
     };
+
+    // ── All registered devices for this receiver — used by both the fee
+    //    notification and the credit alert below. ─────────────────────────────
+    let receiver_tokens = get_device_tokens(db, receiver.id).await;
 
     let is_business = receiver.account_type == "business";
     let should_charge_fee = is_business && is_above_10k;
@@ -1917,11 +1935,33 @@ pub async fn handle_transfer_inflow(
         } else {
             let receiver_name = receiver.account_name.clone().unwrap_or_default();
 
+            // ── 9PSB's own bank code — the fee moves from the receiver's wallet
+            //    to Pressend's operational fee account, both hosted on 9PSB, so
+            //    this now goes through wallet_other_banks (P2P) instead of the
+            //    retired /debit/transfer endpoint. ─────────────────────────────
+            const NINE_PSB_BANK_CODE: &str = "120001";
+
             let fee_payload = serde_json::json!({
-                "accountNo":     event.account_number,
-                "narration":     "Incoming transfer processing fee",
-                "totalAmount":   "1",
-                "transactionId": fee_ref,
+                "customer": {
+                    "account": {
+                        "bank":                NINE_PSB_BANK_CODE,
+                        "name":                receiver_name,
+                        "number":              event.account_number,
+                        "senderaccountnumber": event.account_number,
+                        "sendername":          receiver_name,
+                    }
+                },
+                "narration": "Incoming transfer processing fee",
+                "order": {
+                    "amount":      "35",
+                    "country":     "NGA",
+                    "currency":    "NGN",
+                    "description": "Incoming transfer processing fee",
+                },
+                "transaction": {
+                    "reference": fee_ref,
+                },
+                "transactionType": "P2P",
                 "merchant": {
                     "isFee":              true,
                     "merchantFeeAccount": &cfg._9psb_operational_account,
@@ -1930,7 +1970,7 @@ pub async fn handle_transfer_inflow(
             });
 
             match PsbClient::new(cfg)
-                .post(redis, "/waas/api/v1/debit/transfer", &fee_payload)
+                .post(redis, "/waas/api/v1/wallet_other_banks", &fee_payload)
                 .await
             {
                 Ok(res) => {
@@ -1978,8 +2018,8 @@ pub async fn handle_transfer_inflow(
                             println!("[worker/transfer_inflow] Fee DB insert error: {}", e)
                         });
 
-                        // ── Notify business owner about fee ────────────────────
-                        if let Some(token) = &receiver.device_token {
+                        // ── Notify business owner about fee (all registered devices) ──
+                        for token in &receiver_tokens {
                             send_push_notification(
                                 token,
                                 "Processing Fee Deducted",
@@ -2017,29 +2057,30 @@ pub async fn handle_transfer_inflow(
         }
     }
 
-    // ── Credit alert push notification (fires exactly once — on first insert) ──
-    if let Some(token) = &receiver.device_token {
-        let (title, body) = if should_charge_fee {
-            (
-                "Credit Alert",
-                format!(
-                    "Your wallet has been credited with ₦{}. \
-                     A processing fee of ₦35.00 was applied as this transfer exceeds ₦10,000. \
-                     Sent by: {} ({}).",
-                    &event.amount, event.sender_name, event.sender_bank
-                ),
-            )
-        } else {
-            (
-                "Credit Alert",
-                format!(
-                    "Your wallet has been credited with ₦{}. \
-                     Sent by: {} ({}).",
-                    &event.amount, event.sender_name, event.sender_bank
-                ),
-            )
-        };
+    // ── Credit alert push notification (fires exactly once — on first insert,
+    //    to every registered device). ─────────────────────────────────────────
+    let (title, body) = if should_charge_fee {
+        (
+            "Credit Alert",
+            format!(
+                "Your wallet has been credited with ₦{}. \
+                 A processing fee of ₦35.00 was applied as this transfer exceeds ₦10,000. \
+                 Sent by: {} ({}).",
+                &event.amount, event.sender_name, event.sender_bank
+            ),
+        )
+    } else {
+        (
+            "Credit Alert",
+            format!(
+                "Your wallet has been credited with ₦{}. \
+                 Sent by: {} ({}).",
+                &event.amount, event.sender_name, event.sender_bank
+            ),
+        )
+    };
 
+    for token in &receiver_tokens {
         send_push_notification(
             token,
             title,
@@ -2269,20 +2310,12 @@ pub async fn handle_external_transfer(
                 }
             }
 
-            // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx::query_scalar!(
-                "SELECT device_token FROM accounts WHERE id = $1",
-                sender_uuid
-            )
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+            // ── Push notification (all registered devices) ───────────────────
+            let tokens = get_device_tokens(db, sender_uuid).await;
 
-            if let Some(token) = token {
+            for token in &tokens {
                 send_push_notification(
-                    &token,
+                    token,
                     push_title,
                     &push_body,
                     Some(
@@ -2400,18 +2433,10 @@ pub async fn handle_airtime_purchase(
                 });
             }
 
-            // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx::query_scalar!(
-                "SELECT device_token FROM accounts WHERE id = $1",
-                account_uuid
-            )
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+            // ── Push notification (all registered devices) ───────────────────
+            let tokens = get_device_tokens(db, account_uuid).await;
 
-            if let Some(token) = token {
+            if !tokens.is_empty() {
                 let (title, body) = if vas_status == "SUCCESS" {
                     (
                         "Airtime Purchase Successful",
@@ -2430,21 +2455,23 @@ pub async fn handle_airtime_purchase(
                     )
                 };
 
-                send_push_notification(
-                    &token,
-                    title,
-                    &body,
-                    Some(serde_json::json!({
-                        "route":     "NotificationDetail",
-                        "service":   "airtime_purchase",
-                        "status":    tx_status,
-                        "amount":    event.amount,
-                        "reference": event.reference,
-                        "recipient": event.phone_number,
-                        "network":   event.network,
-                    })),
-                )
-                .await;
+                for token in &tokens {
+                    send_push_notification(
+                        token,
+                        title,
+                        &body,
+                        Some(serde_json::json!({
+                            "route":     "NotificationDetail",
+                            "service":   "airtime_purchase",
+                            "status":    tx_status,
+                            "amount":    event.amount,
+                            "reference": event.reference,
+                            "recipient": event.phone_number,
+                            "network":   event.network,
+                        })),
+                    )
+                    .await;
+                }
             }
 
             println!(
@@ -2480,20 +2507,12 @@ pub async fn handle_airtime_purchase(
             .await
             .map_err(|e| println!("[worker/airtime_purchase] DB failed insert error: {}", e));
 
-            // ── Push notification — failed ─────────────────────────────────────
-            let token = sqlx::query_scalar!(
-                "SELECT device_token FROM accounts WHERE id = $1",
-                account_uuid
-            )
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+            // ── Push notification — failed (all registered devices) ────────────
+            let tokens = get_device_tokens(db, account_uuid).await;
 
-            if let Some(token) = token {
+            for token in &tokens {
                 send_push_notification(
-                    &token,
+                    token,
                     "Airtime Purchase Unsuccessful",
                     &format!(
                         "Dear valued customer, we were unable to process your airtime recharge of ₦{} to {}. Please try again or contact support. Reference: {}.",
@@ -2601,18 +2620,10 @@ pub async fn handle_data_purchase(
                     advance_referral_vas(&db_clone, account_uuid).await;
                 });
             }
-            // ── Push notification ─────────────────────────────────────────────
-            let token = sqlx::query_scalar!(
-                "SELECT device_token FROM accounts WHERE id = $1",
-                account_uuid
-            )
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+            // ── Push notification (all registered devices) ───────────────────
+            let tokens = get_device_tokens(db, account_uuid).await;
 
-            if let Some(token) = token {
+            if !tokens.is_empty() {
                 let (title, body) = if vas_status == "SUCCESS" {
                     (
                         "Data Purchase Successful",
@@ -2635,21 +2646,23 @@ pub async fn handle_data_purchase(
                     )
                 };
 
-                send_push_notification(
-                    &token,
-                    title,
-                    &body,
-                    Some(serde_json::json!({
-                        "route":     "NotificationDetail",
-                        "service":   "data_purchase",
-                        "status":    tx_status,
-                        "amount":    &event.amount,
-                        "reference": event.reference,
-                        "recipient": event.phone_number,
-                        "network":   event.network,
-                    })),
-                )
-                .await;
+                for token in &tokens {
+                    send_push_notification(
+                        token,
+                        title,
+                        &body,
+                        Some(serde_json::json!({
+                            "route":     "NotificationDetail",
+                            "service":   "data_purchase",
+                            "status":    tx_status,
+                            "amount":    &event.amount,
+                            "reference": event.reference,
+                            "recipient": event.phone_number,
+                            "network":   event.network,
+                        })),
+                    )
+                    .await;
+                }
             }
         }
         Err(e) => {
@@ -2675,20 +2688,12 @@ pub async fn handle_data_purchase(
             .await
             .map_err(|e| println!("[worker/data_purchase] DB failed insert error: {}", e));
 
-            // ── Push notification — failed ─────────────────────────────────────
-            let token = sqlx::query_scalar!(
-                "SELECT device_token FROM accounts WHERE id = $1",
-                account_uuid
-            )
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+            // ── Push notification — failed (all registered devices) ────────────
+            let tokens = get_device_tokens(db, account_uuid).await;
 
-            if let Some(token) = token {
+            for token in &tokens {
                 send_push_notification(
-                    &token,
+                    token,
                     "Data Purchase Unsuccessful",
                     &format!(
                         "Dear valued customer, we were unable to process your data purchase of ₦{} for {}. Please try again or contact support. Reference: {}.",
