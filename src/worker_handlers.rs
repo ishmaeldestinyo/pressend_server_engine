@@ -504,6 +504,28 @@ pub fn generate_otp() -> String {
     format!("{:06}", rng.gen_range(100000..999999))
 }
 
+/// Fetches all active device tokens for an account from the `device_tokens` table
+/// (an account can now have more than one registered device).
+async fn fetch_device_tokens(db: &PgPool, account_uuid: uuid::Uuid) -> Vec<String> {
+    match sqlx::query_scalar!(
+        "SELECT device_token FROM device_tokens WHERE account_id = $1",
+        account_uuid
+    )
+    .fetch_all(db)
+    .await
+    {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            log::error!(
+                "[device_tokens] failed to fetch tokens for account_id={}: {}",
+                account_uuid,
+                e
+            );
+            Vec::new()
+        }
+    }
+}
+
 pub async fn handle_change_password(payload: &str, db: &PgPool, mailer: &Mailer) {
     let event: ChangePasswordEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
@@ -1436,22 +1458,6 @@ pub async fn handle_set_payment_pin(payload: &str, mailer: &Mailer) {
     }
 }
 
-// ── Shared helpers ──────────────────────────────────────────────────────────────
-
-/// Fetches every registered device token for an account from the `device_tokens`
-/// table (replaces the old single `accounts.device_token` column — an account
-/// can now have one row per logged-in device). Push notifications should be
-/// fanned out to all of them.
-async fn get_device_tokens(db: &PgPool, account_id: uuid::Uuid) -> Vec<String> {
-    sqlx::query_scalar!(
-        "SELECT device_token FROM device_tokens WHERE account_id = $1",
-        account_id
-    )
-    .fetch_all(db)
-    .await
-    .unwrap_or_default()
-}
-
 pub async fn handle_internal_transfer(
     payload: &str,
     db: &PgPool,
@@ -1486,10 +1492,11 @@ pub async fn handle_internal_transfer(
     //    than INTRA_BANK/OTHER_BANK (those are for the external-transfer flow). ──
     const NINE_PSB_BANK_CODE: &str = "120001";
 
-    // ── Fetch sender + receiver display info, plus the sender's device tokens,
-    //    up front — needed both for the PSB payload (name/sendername) and for
-    //    the sender's push notification later. ─────────────────────────────────
-    let (sender_info, reciever_info, sender_tokens) = tokio::join!(
+    // ── Fetch sender + receiver display info up front — needed both for the
+    //    PSB payload (name/sendername) and for the sender's push notification
+    //    later. Device tokens now live in the dedicated `device_tokens` table
+    //    (an account can have several), so they're fetched separately below. ──
+    let (sender_info, reciever_info) = tokio::join!(
         sqlx::query!(
             "SELECT firstname, lastname FROM accounts WHERE id = $1",
             sender_uuid
@@ -1499,9 +1506,10 @@ pub async fn handle_internal_transfer(
             "SELECT firstname, lastname FROM accounts WHERE id = $1",
             reciever_uuid
         )
-        .fetch_optional(db),
-        get_device_tokens(db, sender_uuid)
+        .fetch_optional(db)
     );
+
+    let sender_device_tokens = fetch_device_tokens(db, sender_uuid).await;
 
     let sender_display_name = match &sender_info {
         Ok(Some(row)) => {
@@ -1615,7 +1623,7 @@ pub async fn handle_internal_transfer(
             )
         );
 
-        for token in &sender_tokens {
+        for token in &sender_device_tokens {
             send_push_notification(
                 token,
                 "Pressend Transfer Issue",
@@ -1709,10 +1717,9 @@ pub async fn handle_internal_transfer(
         }
     }
 
-    // ── Push notification — sender only (all registered devices). Receiver
-    //    credit alert is handled by the PSB inbound webhook
-    //    (handle_transfer_inflow), same as before. ──────────────────────────────
-    for token in &sender_tokens {
+    // ── Push notification — sender only. Receiver credit alert is handled by
+    //    the PSB inbound webhook (handle_transfer_inflow), same as before. ────
+    for token in &sender_device_tokens {
         send_push_notification(
             token,
             "Transfer Successful",
@@ -1848,10 +1855,6 @@ pub async fn handle_transfer_inflow(
         }
     };
 
-    // ── All registered devices for this receiver — used by both the fee
-    //    notification and the credit alert below. ─────────────────────────────
-    let receiver_tokens = get_device_tokens(db, receiver.id).await;
-
     let is_business = receiver.account_type == "business";
     let should_charge_fee = is_business && is_above_10k;
 
@@ -1916,6 +1919,10 @@ pub async fn handle_transfer_inflow(
         }
     }
 
+    // ── Fetch device tokens for the receiver up front — used by both the fee
+    //    notification and the credit alert below. ─────────────────────────────
+    let receiver_device_tokens = fetch_device_tokens(db, receiver.id).await;
+
     // ── Debit ₦35 fee if business account and amount > ₦10,000 ───────────────
     if should_charge_fee {
         let fee_ref = format!("{}-FEE", event.transaction_ref);
@@ -1935,33 +1942,11 @@ pub async fn handle_transfer_inflow(
         } else {
             let receiver_name = receiver.account_name.clone().unwrap_or_default();
 
-            // ── 9PSB's own bank code — the fee moves from the receiver's wallet
-            //    to Pressend's operational fee account, both hosted on 9PSB, so
-            //    this now goes through wallet_other_banks (P2P) instead of the
-            //    retired /debit/transfer endpoint. ─────────────────────────────
-            const NINE_PSB_BANK_CODE: &str = "120001";
-
             let fee_payload = serde_json::json!({
-                "customer": {
-                    "account": {
-                        "bank":                NINE_PSB_BANK_CODE,
-                        "name":                receiver_name,
-                        "number":              event.account_number,
-                        "senderaccountnumber": event.account_number,
-                        "sendername":          receiver_name,
-                    }
-                },
-                "narration": "Incoming transfer processing fee",
-                "order": {
-                    "amount":      "35",
-                    "country":     "NGA",
-                    "currency":    "NGN",
-                    "description": "Incoming transfer processing fee",
-                },
-                "transaction": {
-                    "reference": fee_ref,
-                },
-                "transactionType": "P2P",
+                "accountNo":     event.account_number,
+                "narration":     "Incoming transfer processing fee",
+                "totalAmount":   "1",
+                "transactionId": fee_ref,
                 "merchant": {
                     "isFee":              true,
                     "merchantFeeAccount": &cfg._9psb_operational_account,
@@ -1970,7 +1955,7 @@ pub async fn handle_transfer_inflow(
             });
 
             match PsbClient::new(cfg)
-                .post(redis, "/waas/api/v1/wallet_other_banks", &fee_payload)
+                .post(redis, "/waas/api/v1/debit/transfer", &fee_payload)
                 .await
             {
                 Ok(res) => {
@@ -2018,8 +2003,8 @@ pub async fn handle_transfer_inflow(
                             println!("[worker/transfer_inflow] Fee DB insert error: {}", e)
                         });
 
-                        // ── Notify business owner about fee (all registered devices) ──
-                        for token in &receiver_tokens {
+                        // ── Notify business owner about fee ────────────────────
+                        for token in &receiver_device_tokens {
                             send_push_notification(
                                 token,
                                 "Processing Fee Deducted",
@@ -2057,8 +2042,7 @@ pub async fn handle_transfer_inflow(
         }
     }
 
-    // ── Credit alert push notification (fires exactly once — on first insert,
-    //    to every registered device). ─────────────────────────────────────────
+    // ── Credit alert push notification (fires exactly once — on first insert) ──
     let (title, body) = if should_charge_fee {
         (
             "Credit Alert",
@@ -2080,7 +2064,7 @@ pub async fn handle_transfer_inflow(
         )
     };
 
-    for token in &receiver_tokens {
+    for token in &receiver_device_tokens {
         send_push_notification(
             token,
             title,
@@ -2310,8 +2294,8 @@ pub async fn handle_external_transfer(
                 }
             }
 
-            // ── Push notification (all registered devices) ───────────────────
-            let tokens = get_device_tokens(db, sender_uuid).await;
+            // ── Push notification ─────────────────────────────────────────────
+            let tokens = fetch_device_tokens(db, sender_uuid).await;
 
             for token in &tokens {
                 send_push_notification(
@@ -2433,8 +2417,8 @@ pub async fn handle_airtime_purchase(
                 });
             }
 
-            // ── Push notification (all registered devices) ───────────────────
-            let tokens = get_device_tokens(db, account_uuid).await;
+            // ── Push notification ─────────────────────────────────────────────
+            let tokens = fetch_device_tokens(db, account_uuid).await;
 
             if !tokens.is_empty() {
                 let (title, body) = if vas_status == "SUCCESS" {
@@ -2507,8 +2491,8 @@ pub async fn handle_airtime_purchase(
             .await
             .map_err(|e| println!("[worker/airtime_purchase] DB failed insert error: {}", e));
 
-            // ── Push notification — failed (all registered devices) ────────────
-            let tokens = get_device_tokens(db, account_uuid).await;
+            // ── Push notification — failed ─────────────────────────────────────
+            let tokens = fetch_device_tokens(db, account_uuid).await;
 
             for token in &tokens {
                 send_push_notification(
@@ -2620,8 +2604,8 @@ pub async fn handle_data_purchase(
                     advance_referral_vas(&db_clone, account_uuid).await;
                 });
             }
-            // ── Push notification (all registered devices) ───────────────────
-            let tokens = get_device_tokens(db, account_uuid).await;
+            // ── Push notification ─────────────────────────────────────────────
+            let tokens = fetch_device_tokens(db, account_uuid).await;
 
             if !tokens.is_empty() {
                 let (title, body) = if vas_status == "SUCCESS" {
@@ -2688,8 +2672,8 @@ pub async fn handle_data_purchase(
             .await
             .map_err(|e| println!("[worker/data_purchase] DB failed insert error: {}", e));
 
-            // ── Push notification — failed (all registered devices) ────────────
-            let tokens = get_device_tokens(db, account_uuid).await;
+            // ── Push notification — failed ─────────────────────────────────────
+            let tokens = fetch_device_tokens(db, account_uuid).await;
 
             for token in &tokens {
                 send_push_notification(

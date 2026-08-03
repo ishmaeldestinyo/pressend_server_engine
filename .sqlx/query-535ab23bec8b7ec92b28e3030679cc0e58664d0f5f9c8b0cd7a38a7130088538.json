@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, device_token, account_type, account_name\n        FROM accounts\n        WHERE account_number = $1 AND deleted_at IS NULL\n        ",
+  "query": "\n        SELECT id, account_type, account_name\n        FROM accounts\n        WHERE account_number = $1 AND deleted_at IS NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -10,16 +10,11 @@
       },
       {
         "ordinal": 1,
-        "name": "device_token",
-        "type_info": "Varchar"
-      },
-      {
-        "ordinal": 2,
         "name": "account_type",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "account_name",
         "type_info": "Varchar"
       }
@@ -31,10 +26,9 @@
     },
     "nullable": [
       false,
-      true,
       false,
       true
     ]
   },
-  "hash": "18d64cc176d26d220c2e3033ebd77476b13e995253fb86f4bd21e7c4c21e2442"
+  "hash": "535ab23bec8b7ec92b28e3030679cc0e58664d0f5f9c8b0cd7a38a7130088538"
 }
