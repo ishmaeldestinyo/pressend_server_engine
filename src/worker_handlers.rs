@@ -504,19 +504,38 @@ pub fn generate_otp() -> String {
     format!("{:06}", rng.gen_range(100000..999999))
 }
 
-/// Fetches all active device tokens for an account from the `device_tokens` table
-/// (an account can now have more than one registered device).
+/// Fetches the account's most recently active device token from the
+/// `device_tokens` table.
 ///
-/// `DISTINCT` is used because the table's uniqueness constraint is on
-/// `(account_id, device_id)`, not on `device_token` itself — so the same
-/// physical device can end up with more than one row under the same account
-/// (e.g. app reinstall generating a new `device_id` for a token that's
-/// otherwise unchanged, or the account simply being logged into the same
-/// device twice). Without deduping here, that would cause the same push
-/// notification to be sent twice to the same device.
+/// Earlier this used `SELECT DISTINCT device_token ...` and looped over every
+/// row for the account, on the theory that an account could have several
+/// legitimate devices. In practice this caused duplicate push notifications
+/// (e.g. the ₦35 fee alert firing twice for a single, correctly-recorded fee
+/// transaction): `DISTINCT` only collapses rows whose `device_token` string is
+/// byte-identical, but a stale row left behind by an old install/device_id can
+/// hold a *different* token string that still happens to route to the same
+/// physical device. Those rows are not deduped by `DISTINCT` and each one
+/// triggers its own notification.
+///
+/// Restricting to the single row with the latest `updated_at` per account
+/// guarantees exactly one notification per event, at the cost of only
+/// notifying the last-active device rather than every device on file. If
+/// genuine multi-device push is needed later, the right fix is upstream —
+/// wherever device tokens get inserted/updated should replace or expire an
+/// account's older row(s) instead of accumulating new ones — rather than
+/// fanning out notifications to every stale token found here.
+///
+/// Callers still receive a `Vec<String>` (0 or 1 entries) so existing
+/// `for token in &tokens { ... }` loops don't need to change.
 async fn fetch_device_tokens(db: &PgPool, account_uuid: uuid::Uuid) -> Vec<String> {
     match sqlx::query_scalar!(
-        "SELECT DISTINCT device_token FROM device_tokens WHERE account_id = $1",
+        r#"
+        SELECT device_token
+        FROM device_tokens
+        WHERE account_id = $1
+        ORDER BY updated_at DESC
+        LIMIT 1
+        "#,
         account_uuid
     )
     .fetch_all(db)
