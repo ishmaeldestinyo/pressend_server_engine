@@ -506,9 +506,17 @@ pub fn generate_otp() -> String {
 
 /// Fetches all active device tokens for an account from the `device_tokens` table
 /// (an account can now have more than one registered device).
+///
+/// `DISTINCT` is used because the table's uniqueness constraint is on
+/// `(account_id, device_id)`, not on `device_token` itself — so the same
+/// physical device can end up with more than one row under the same account
+/// (e.g. app reinstall generating a new `device_id` for a token that's
+/// otherwise unchanged, or the account simply being logged into the same
+/// device twice). Without deduping here, that would cause the same push
+/// notification to be sent twice to the same device.
 async fn fetch_device_tokens(db: &PgPool, account_uuid: uuid::Uuid) -> Vec<String> {
     match sqlx::query_scalar!(
-        "SELECT device_token FROM device_tokens WHERE account_id = $1",
+        "SELECT DISTINCT device_token FROM device_tokens WHERE account_id = $1",
         account_uuid
     )
     .fetch_all(db)
@@ -1764,7 +1772,7 @@ pub async fn handle_transfer_inflow(
     let amount_clean = event.amount.replace(",", "");
     let amount_bd = bigdecimal::BigDecimal::from_str(&amount_clean).unwrap_or_default();
     let amount_f64: f64 = amount_clean.parse().unwrap_or(0.0);
-    let is_above_10k = amount_f64 > 10_000.0;
+    let is_above_10k = amount_f64 >= 10_000.0;
 
     // ── Check if transactionref already exists in our system ─────────────────
     let existing = sqlx::query!(
